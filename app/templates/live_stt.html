@@ -18,8 +18,8 @@ const $ = id => document.getElementById(id);
 let socket, stream, ctx, source, processor, isRunning=false, confirmed=[], partial=new Map(), done=new Map();
 let leftover = new Float32Array(0), nextItem = 0;
 const submitted=new Set(), playChunks=new Map();
-let nextChunk=0, activeTurn=null, playing=false, mutedForAgent=false;
-function resetTurn(id){activeTurn=id;nextChunk=0;playChunks.clear();$('agent-reply').textContent='';}
+let nextChunk=0, activeTurn=null, playing=false, mutedForAgent=false, agentFinished=false, expectedChunks=0;
+function resetTurn(id){activeTurn=id;nextChunk=0;agentFinished=false;expectedChunks=0;mutedForAgent=true;playChunks.clear();$('agent-reply').textContent='';}
 async function playNext(){
  if(playing||!playChunks.has(nextChunk)) return;
  playing=true;mutedForAgent=true;$('agent-status').textContent='AI gapiryapti…';
@@ -28,7 +28,7 @@ async function playNext(){
  audio.src='data:audio/mpeg;base64,'+data;
  try{await audio.play();}catch(e){playing=false;mutedForAgent=false;$('agent-status').textContent='Ovoz avtomatik boshlanmadi: brauzer ruxsatini tekshiring.';}
 }
-$('agent-player').onended=()=>{playing=false;if(playChunks.has(nextChunk))playNext();else{mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';}};
+$('agent-player').onended=()=>{playing=false;if(playChunks.has(nextChunk))playNext();else if(agentFinished&&nextChunk>=expectedChunks){mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';}};
 
 function render(){
   $('confirmed').textContent = confirmed.join(' ') + (confirmed.length ? ' ' : '');
@@ -94,9 +94,14 @@ $('start').onclick=async()=>{
       } else if(type==='agent_audio'){
         if(m.turn_id===activeTurn){playChunks.set(m.index,m.audio);playNext();}
       } else if(type==='agent_done'){
-        if(!playing && playChunks.size===0)$('agent-status').textContent='Tinglayapman…';
+        if(m.turn_id===activeTurn){
+          agentFinished=true;expectedChunks=m.chunks||0;
+          if(!playing && playChunks.size===0 && nextChunk>=expectedChunks){
+            mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';
+          }else playNext();
+        }
       } else if(type==='agent_error'){
-        $('agent-status').textContent=m.message;
+        mutedForAgent=false;$('agent-status').textContent=m.message;
       } else if(type==='error'){$('status').textContent=m.message||'API xatosi';}
     };
     socket.onclose=()=>{if(isRunning)stop()};
