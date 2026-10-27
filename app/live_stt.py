@@ -28,7 +28,7 @@ _SUPPORTED_REALTIME_LANGS = {
 
 def transcription_session(silence_ms: int = 420):
     language = os.getenv("LIVE_STT_LANGUAGE", "uz").strip().lower()
-    prompt = os.getenv("LIVE_STT_VOCABULARY_HINTS", "").strip()
+    prompt = os.getenv("LIVE_STT_VOCABULARY_HINTS", "O'zbek tilida (lotin alifbosida):").strip()
     transcription = {"model": os.getenv("LIVE_STT_MODEL", "gpt-4o-transcribe")}
     if language in _SUPPORTED_REALTIME_LANGS:
         transcription["language"] = language
@@ -112,6 +112,10 @@ async def live_stt_socket(client: WebSocket):
                 ):
                     raw_tx = event.get("transcript", "")
                     cleaned_tx = clean_transcript(raw_tx) if kind == "conversation.item.input_audio_transcription.completed" else raw_tx
+                    if kind == "conversation.item.input_audio_transcription.completed":
+                        low_tx = cleaned_tx.lower()
+                        if "lotin alifbosida" in low_tx or low_tx in {"o'zbek tilida", "o'zbek tilida:"}:
+                            continue
                     await client.send_json({
                         "type": kind,
                         "item_id": event.get("item_id"),

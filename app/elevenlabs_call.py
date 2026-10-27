@@ -698,6 +698,8 @@ HALLUCINATION_SUBSTRINGS = (
     "редактор субтитров",
     "assalomu alaykum, salom, sahiy haqida",
     "dostavka bormi, bo'lib to'lash, muddatli to'lov",
+    "lotin alifbosida",
+    "o'zbek tilida:",
     "www.",
     "http",
 )
