@@ -16,6 +16,7 @@ from xml.sax.saxutils import escape
 from dotenv import load_dotenv
 from fastapi import APIRouter, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, Response, JSONResponse
+from .speech_cleanup import clean_transcript
 
 load_dotenv()
 
@@ -743,7 +744,7 @@ async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/web
         if len(pcm_data) < 9600:  # Require at least 0.30s of recorded audio
             return ""
 
-        # Server-Side Human Speech Energy Gate (20ms frames = 320 samples at 16kHz)
+        # Adaptive Server-Side Speech Energy Gate (20ms frames = 320 samples at 16kHz)
         samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32)
         n_frames = len(samples) // 320
         if n_frames < 15:
@@ -751,10 +752,12 @@ async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/web
         frames = samples[: n_frames * 320].reshape(n_frames, 320)
         frame_rms = np.sqrt(np.mean(frames * frames, axis=1))
         peak_rms = float(np.max(frame_rms))
-        voiced_frames = int(np.sum(frame_rms > 950.0))
+        noise_floor = float(np.percentile(frame_rms, 20))
+        speech_gate = max(650.0, noise_floor * 2.2)
+        voiced_frames = int(np.sum(frame_rms > speech_gate))
 
         # Reject background room noise, clicks, coughs, or breathing immediately!
-        if peak_rms < 1350.0 or voiced_frames < 12:
+        if peak_rms < max(950.0, noise_floor * 2.8) or voiced_frames < 10:
             return ""
 
         with wave.open(wav_io, "wb") as wf:
@@ -772,16 +775,20 @@ async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/web
     api_key = get_active_openai_key()
 
     try:
+        stt_data = {"model": "gpt-4o-mini-transcribe"}
+        vocab_hints = (os.getenv("STT_VOCABULARY_HINTS") or "").strip()
+        if vocab_hints:
+            stt_data["prompt"] = vocab_hints[:300]
+
         resp = await client.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {api_key}"},
             files={"file": (upload_name, upload_bytes, upload_mime)},
-            data={
-                "model": "gpt-4o-mini-transcribe",
-            },
+            data=stt_data,
         )
         if resp.status_code == 200:
-            text = (resp.json().get("text") or "").strip()
+            raw_text = (resp.json().get("text") or "").strip()
+            text = clean_transcript(raw_text)
             if _is_hallucinated_transcript(text):
                 return ""
             return text

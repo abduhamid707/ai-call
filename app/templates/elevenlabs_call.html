@@ -1315,9 +1315,9 @@
             source.connect(micAnalyser);
             micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
 
-            // 180ms Pre-Roll DelayNode so the first syllable of speech is NEVER clipped!
-            const preRollDelay = audioCtx.createDelay(0.5);
-            preRollDelay.delayTime.value = 0.18;
+            // 400ms Pre-Roll DelayNode so the first syllable/consonant ("tovarim", "buyurtmam") is NEVER clipped!
+            const preRollDelay = audioCtx.createDelay(1.0);
+            preRollDelay.delayTime.value = 0.40;
             delayedMicDest = audioCtx.createMediaStreamDestination();
             source.connect(preRollDelay);
             preRollDelay.connect(delayedMicDest);
