@@ -31,7 +31,7 @@ def transcription_session():
                     "type": "server_vad",
                     "threshold": 0.35,
                     "prefix_padding_ms": 500,
-                    "silence_duration_ms": 850,
+                    "silence_duration_ms": 600,
                 },
             }
         },
