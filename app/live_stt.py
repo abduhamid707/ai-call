@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import os
+import socket
 from pathlib import Path
 
 import aiohttp
@@ -12,7 +13,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from .speech_cleanup import clean_transcript
-from .elevenlabs_call import get_character_system_prompt
+from .elevenlabs_call import (
+    _match_sahiy_faq,
+    generate_edge_tts_audio,
+    get_character_system_prompt,
+)
 
 load_dotenv()
 
@@ -86,13 +91,36 @@ async def live_stt_socket(client: WebSocket):
             await client.send_json(data)
 
     async def agent_worker():
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=75)) as http:
+        connector = aiohttp.TCPConnector(family=socket.AF_INET, ttl_dns_cache=600)
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=75),
+        ) as http:
+            # Pre-warm TLS connection to api.openai.com while user is speaking
+            try:
+                async with http.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                ):
+                    pass
+            except Exception:
+                pass
             while True:
                 turn_id, question = await response_queue.get()
                 try:
                     history.append({"role": "user", "content": question})
                     history[:] = history[:1] + history[-14:]
                     await emit({"type": "agent_thinking", "turn_id": turn_id})
+
+                    # Fast-path: 0ms Sahiy FAQ match + 0ms RAM TTS cache
+                    faq_answer = _match_sahiy_faq(question)
+                    if faq_answer:
+                        await emit({"type": "agent_text_delta", "turn_id": turn_id, "delta": faq_answer})
+                        await synthesize(http, turn_id, 0, faq_answer)
+                        history.append({"role": "assistant", "content": faq_answer})
+                        await emit({"type": "agent_done", "turn_id": turn_id, "chunks": 1})
+                        continue
+
                     async with http.post(
                         "https://api.openai.com/v1/chat/completions",
                         headers={"Authorization": f"Bearer {key}"},
@@ -124,7 +152,16 @@ async def live_stt_socket(client: WebSocket):
                                 text_parts.append(delta)
                                 pending += delta
                                 await emit({"type": "agent_text_delta", "turn_id": turn_id, "delta": delta})
-                                if len(tasks) < 7 and (any(c in pending for c in ".!?") or len(pending) > 110):
+                                first_clause_ready = (
+                                    len(tasks) == 0
+                                    and len(pending.strip()) >= 22
+                                    and any(c in pending for c in ",.!?;:")
+                                )
+                                if len(tasks) < 7 and (
+                                    first_clause_ready
+                                    or any(c in pending for c in ".!?")
+                                    or len(pending) > 110
+                                ):
                                     piece, pending = pending, ""
                                     tasks.append(
                                         asyncio.create_task(synthesize(http, turn_id, len(tasks), piece))
@@ -148,19 +185,30 @@ async def live_stt_socket(client: WebSocket):
                     response_queue.task_done()
 
     async def synthesize(http, turn_id, index, text):
-        async with http.post(
-            "https://api.openai.com/v1/audio/speech",
-            headers={"Authorization": f"Bearer {key}"},
-            json={
-                "model": os.getenv("LIVE_AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
-                "voice": os.getenv("LIVE_AGENT_VOICE", "coral"),
-                "input": text,
-                "response_format": "mp3",
-            },
-        ) as reply:
-            if reply.status != 200:
-                raise RuntimeError("TTS API failure")
-            audio = await reply.read()
+        audio = b""
+        if os.getenv("LIVE_AGENT_TTS_PROVIDER", "edge_tts").lower() != "openai":
+            try:
+                audio = await generate_edge_tts_audio(
+                    text,
+                    voice=os.getenv("LIVE_AGENT_EDGE_VOICE", "uz-UZ-SardorNeural"),
+                    speed=1.15,
+                )
+            except Exception:
+                audio = b""
+        if not audio:
+            async with http.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": os.getenv("LIVE_AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
+                    "voice": os.getenv("LIVE_AGENT_VOICE", "coral"),
+                    "input": text,
+                    "response_format": "mp3",
+                },
+            ) as reply:
+                if reply.status != 200:
+                    raise RuntimeError("TTS API failure")
+                audio = await reply.read()
         await emit(
             {
                 "type": "agent_audio",
