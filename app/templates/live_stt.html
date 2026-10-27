@@ -5,7 +5,7 @@
 body{font:16px system-ui,sans-serif;background:#f6f7fc;color:#0a2937;margin:0;padding:32px}
 main{max-width:780px;margin:auto;background:white;border-radius:20px;padding:30px;box-shadow:0 8px 32px #0a293712}
 h1{margin-top:0}button{padding:12px 18px;border:0;border-radius:10px;background:#0a2937;color:white;cursor:pointer;margin-right:8px}
-button:disabled{opacity:.4;cursor:not-allowed}#text{min-height:180px;white-space:pre-wrap;line-height:1.8;font-size:19px;margin-top:20px}
+button:disabled{opacity:.4;cursor:not-allowed}#agent-box{margin-top:22px;border-top:1px solid #e5e7eb;padding-top:12px}#agent-reply{white-space:pre-wrap;line-height:1.7}#text{min-height:180px;white-space:pre-wrap;line-height:1.8;font-size:19px;margin-top:20px}
 #interim{color:#6b7280}#status{color:#527481}small{display:block;margin-top:10px;color:#666}
 </style></head><body><main>
 <h1>🎙️ Jonli ovozdan matnga</h1>
@@ -13,10 +13,23 @@ button:disabled{opacity:.4;cursor:not-allowed}#text{min-height:180px;white-space
 <button id="start">Gapirishni boshlash</button><button id="stop" disabled>To'xtatish</button><button id="copy">Matnni nusxalash</button>
 <div id="text" aria-live="polite"><span id="confirmed"></span> <span id="interim"></span></div>
 <small>Vaqtinchalik matn aniqlashtirilishi mumkin. Yakuniy matn OpenAI tasdiqlaganda saqlanadi.</small>
-</main><script>
+<section id="agent-box"><h2>🤖 AI agent</h2><p id="agent-status">Javobni kutmoqda…</p><div id="agent-reply" aria-live="polite"></div><audio id="agent-player" preload="auto"></audio></section></main><script>
 const $ = id => document.getElementById(id);
 let socket, stream, ctx, source, processor, isRunning=false, confirmed=[], partial=new Map(), done=new Map();
 let leftover = new Float32Array(0), nextItem = 0;
+const submitted=new Set(), playChunks=new Map();
+let nextChunk=0, activeTurn=null, playing=false, mutedForAgent=false, agentFinished=false, expectedChunks=0;
+function resetTurn(id){activeTurn=id;nextChunk=0;agentFinished=false;expectedChunks=0;mutedForAgent=true;playChunks.clear();$('agent-reply').textContent='';}
+async function playNext(){
+ if(playing||!playChunks.has(nextChunk)) return;
+ playing=true;mutedForAgent=true;$('agent-status').textContent='AI gapiryapti…';
+ const idx=nextChunk++;const data=playChunks.get(idx);playChunks.delete(idx);
+ const audio=$('agent-player');
+ audio.src='data:audio/mpeg;base64,'+data;
+ try{await audio.play();}catch(e){playing=false;mutedForAgent=false;$('agent-status').textContent='Ovoz avtomatik boshlanmadi: brauzer ruxsatini tekshiring.';}
+}
+$('agent-player').onended=()=>{playing=false;if(playChunks.has(nextChunk))playNext();else if(agentFinished&&nextChunk>=expectedChunks){mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';}};
+
 function render(){
   $('confirmed').textContent = confirmed.join(' ') + (confirmed.length ? ' ' : '');
   $('interim').textContent = [...partial.values()].join(' ');
@@ -27,6 +40,10 @@ function appendFinal(id, text){
   partial.delete(id);
   confirmed.push(text);
   render();
+  if(isRunning && socket?.readyState===WebSocket.OPEN && !submitted.has(id) && text.trim()){
+    submitted.add(id);
+    socket.send(JSON.stringify({type:'agent_utterance',item_id:id,text:text.trim()}));
+  }
 }
 function encodePCM(samples){
   let buf=new ArrayBuffer(samples.length*2), view=new DataView(buf);
@@ -70,6 +87,21 @@ $('start').onclick=async()=>{
         let id=m.item_id||'current';if(!done.has(id)) partial.set(id,(partial.get(id)||'')+m.delta);render();
       } else if(type==='conversation.item.input_audio_transcription.completed'){
         appendFinal(m.item_id||'current',m.transcript);
+      } else if(type==='agent_thinking'){
+        resetTurn(m.turn_id);$('agent-status').textContent='AI javob tayyorlayapti…';
+      } else if(type==='agent_text_delta'){
+        if(m.turn_id===activeTurn)$('agent-reply').textContent+=m.delta;
+      } else if(type==='agent_audio'){
+        if(m.turn_id===activeTurn){playChunks.set(m.index,m.audio);playNext();}
+      } else if(type==='agent_done'){
+        if(m.turn_id===activeTurn){
+          agentFinished=true;expectedChunks=m.chunks||0;
+          if(!playing && playChunks.size===0 && nextChunk>=expectedChunks){
+            mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';
+          }else playNext();
+        }
+      } else if(type==='agent_error'){
+        mutedForAgent=false;$('agent-status').textContent=m.message;
       } else if(type==='error'){$('status').textContent=m.message||'API xatosi';}
     };
     socket.onclose=()=>{if(isRunning)stop()};
@@ -78,7 +110,7 @@ $('start').onclick=async()=>{
     source=ctx.createMediaStreamSource(stream);
     processor=ctx.createScriptProcessor(2048,1,1);
     processor.onaudioprocess=e=>{
-      if(!isRunning||socket.readyState!==WebSocket.OPEN)return;
+      if(!isRunning||mutedForAgent||socket.readyState!==WebSocket.OPEN)return;
       if(socket.bufferedAmount>250000)return;
       let sample=resample(e.inputBuffer.getChannelData(0),ctx.sampleRate);
       if(sample.length)socket.send(encodePCM(sample));
