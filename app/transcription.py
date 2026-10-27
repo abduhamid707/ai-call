@@ -7,6 +7,7 @@ import aiohttp
 import tempfile
 from faster_whisper import WhisperModel
 from dotenv import load_dotenv
+from .speech_cleanup import clean_transcript
 
 # Import torch only if available (needed for CUDA detection)
 try:
@@ -48,7 +49,7 @@ def _env_float(name: str, default: float) -> float:
 # Seconds of continuous silence before STT stops recording; lower = faster cutoff
 STT_SILENCE_DURATION = _env_float("STT_SILENCE_DURATION", 2.0)
 # Mean audio amplitude below this counts as silence; lower = more sensitive
-STT_SILENCE_THRESHOLD = _env_float("STT_SILENCE_THRESHOLD", 300.0)
+STT_SILENCE_THRESHOLD = _env_float("STT_SILENCE_THRESHOLD", 140.0)
 
 # Initialize whisper model as None to lazy load
 whisper_model = None
@@ -64,7 +65,7 @@ def initialize_whisper_model():
     device = "cuda" if (torch and torch.cuda.is_available()) else "cpu"
     
     # Default multilingual model size (supports Uzbek, Russian, English, etc.)
-    model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+    model_size = os.getenv("WHISPER_MODEL_SIZE", "small")
     
     try:
         print(f"Attempting to load Faster-Whisper ({model_size}) on {device}...")
@@ -87,11 +88,11 @@ def transcribe_with_whisper(audio_file):
     # Lazy load the model only when needed
     model = initialize_whisper_model()
     
-    segments, info = model.transcribe(audio_file, beam_size=5)
+    segments, info = model.transcribe(audio_file, beam_size=5, language=os.getenv("STT_LANGUAGE") or None, initial_prompt=os.getenv("STT_VOCABULARY_HINTS") or None, condition_on_previous_text=False)
     transcription = ""
     for segment in segments:
         transcription += segment.text + " "
-    return transcription.strip()
+    return clean_transcript(transcription)
 
 async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe"):
     """Transcribe audio using OpenAI's API"""
@@ -111,6 +112,10 @@ async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe")
             
             # Use the model directly
             form_data.add_field('model', model)
+            # Optional domain vocabulary helps with uncommon Uzbek/product terms.
+            hints = os.getenv("STT_VOCABULARY_HINTS", "").strip()
+            if hints and model in ("gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"):
+                form_data.add_field("prompt", hints[:1000])
             
             headers = {
                 "Authorization": f"Bearer {OPENAI_API_KEY}"
@@ -120,7 +125,7 @@ async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe")
                 if response.status == 200:
                     result = await response.json()
                     transcription = result.get("text", "")
-                    return transcription
+                    return clean_transcript(transcription)
                 else:
                     error_text = await response.text()
                     print(f"Error from OpenAI API: {error_text}")
@@ -249,7 +254,8 @@ async def record_audio_enhanced(
     if send_status_callback:
         await send_status_callback({"action": "waiting_for_speech"})
     
-    # Flush initial buffer
+    # Measure ambient noise without assuming that every soft voice is silence.
+    calibration = []
     for _ in range(5):
         if should_stop_callback and should_stop_callback():
             stream.stop_stream()
@@ -260,8 +266,14 @@ async def record_audio_enhanced(
             except:
                 pass
             return None
-        stream.read(CHUNK)
+        sample = stream.read(CHUNK, exception_on_overflow=False)
+        calibration.append(float(np.mean(np.abs(np.frombuffer(sample, dtype=np.int16).astype(np.float32)))))
         
+    # A quieter room should permit quieter speech; noisy rooms need a higher gate.
+    ambient = float(np.median(calibration)) if calibration else 0.0
+    effective_threshold = max(45.0, min(float(silence_threshold), ambient * 2.3 + 30.0))
+    from collections import deque
+    pre_roll = deque(maxlen=max(1, int(0.4 * RATE / CHUNK)))
     initial_silent_chunks = 0
     silence_broken = False
     
@@ -281,7 +293,8 @@ async def record_audio_enhanced(
             return None
 
         data = stream.read(CHUNK, exception_on_overflow=False)
-        if not detect_silence(data, threshold=silence_threshold):
+        pre_roll.append(data)
+        if not detect_silence(data, threshold=effective_threshold):
             silence_broken = True
             print("Speech detected, recording started...")
             break
@@ -315,14 +328,12 @@ async def record_audio_enhanced(
         await asyncio.sleep(0)
                 
     # Now begin actual recording
-    frames = []
+    frames = list(pre_roll)
     print("Enhanced recording...")
     if send_status_callback:
         await send_status_callback({"action": "recording_started"})
     
-    # Add the initial speech chunk that broke the silence
-    if silence_broken:
-        frames.append(data)
+    # The triggering speech chunk is already included in pre_roll.
     
     silent_chunks = 0
     speaking_chunks = 0
@@ -344,7 +355,7 @@ async def record_audio_enhanced(
 
         data = stream.read(CHUNK, exception_on_overflow=False)
         frames.append(data)
-        if detect_silence(data, threshold=silence_threshold):
+        if detect_silence(data, threshold=effective_threshold):
             silent_chunks += 1
             if silent_chunks > silence_duration * (RATE / CHUNK):
                 break
