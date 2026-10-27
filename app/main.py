@@ -169,6 +169,10 @@ app.add_middleware(
 from .elevenlabs_call import router as elevenlabs_call_router, EDGE_TTS_VOICES
 app.include_router(elevenlabs_call_router)
 
+# Standalone realtime microphone transcription page and websocket.
+from .live_stt import router as live_stt_router
+app.include_router(live_stt_router)
+
 @app.get("/call", response_class=HTMLResponse)
 @app.get("/elevenlabs_call", response_class=HTMLResponse)
 async def get_elevenlabs_call_page(request: Request):
