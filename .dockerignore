@@ -1,0 +1,86 @@
+# Ignore Python bytecode files
+__pycache__
+*.pyc
+*.pyo
+
+# Ignore virtual environments
+venv/
+venv
+env/
+env
+ENV/
+ENV
+.venv/
+.venv
+.venv*/
+.venv-*
+*venv/
+*venv
+.conda/
+conda-meta/
+
+# Ignore uv files (Docker uses pip + requirements.txt)
+uv.lock
+.python-version
+
+# Exclude .env file (contains secrets) but allow .env.sample
+.env
+.env.local
+.env.*.local
+!.env.sample
+
+# Ignore the .git directory
+.git
+.gitignore
+
+# Ignore Docker-related files
+Dockerfile
+.dockerignore
+
+# Ignore OS-generated files
+.DS_Store
+Thumbs.db
+
+# Ignore logs
+*.log
+
+# Ignore coverage reports
+htmlcov
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Ignore GitHub workflows
+.github
+
+# Ignore large model directories (downloaded at runtime)
+pretrained_models/
+
+# Ignore character history files
+characters/*/history/
+
+# Ignore documentation (not needed in container)
+docs/
+*.md
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore build artifacts
+build/
+dist/
+*.egg-info/

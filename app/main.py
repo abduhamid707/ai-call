@@ -1,0 +1,1361 @@
+import json
+import os
+import sys
+import signal
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+import time
+import uvicorn
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from starlette.background import BackgroundTask
+from .speechify_compat import speechify_caller_headers
+from .shared import clients, set_current_character, conversation_history, add_client, remove_client
+from .app_logic import start_conversation, stop_conversation, pause_audio_playback, resume_audio_playback, set_env_variable, save_conversation_history, characters_folder, set_transcription_model, fetch_ollama_models, load_character_prompt, save_character_specific_history
+from .enhanced_logic import start_enhanced_conversation, stop_enhanced_conversation, pause_enhanced_audio_playback, resume_enhanced_audio_playback
+from .openai_realtime import (
+    DEFAULT_LOCAL_REALTIME_CALLS_URL,
+    DEFAULT_LOCAL_REALTIME_SILENCE_MS,
+    DEFAULT_LOCAL_REALTIME_VAD_THRESHOLD,
+    DEFAULT_LOCAL_REALTIME_VOICE,
+    DEFAULT_OPENAI_REALTIME_MODEL,
+    DEFAULT_OPENAI_REALTIME_VOICE,
+    DEFAULT_REALTIME_PROVIDER,
+    LOCAL_REALTIME_VOICES,
+    OPENAI_REALTIME_CALLS_URL,
+    build_local_realtime_call_url,
+    build_openai_realtime_session,
+    extract_local_realtime_call_id,
+    normalize_local_realtime_url,
+    normalize_local_realtime_silence_ms,
+    normalize_local_realtime_vad_threshold,
+    normalize_local_realtime_voice,
+    normalize_openai_realtime_model,
+    normalize_realtime_provider,
+)
+from .xai_compat import normalize_xai_model
+import logging
+import uuid
+import aiohttp
+import shutil
+
+
+def center_banner(banner_text: str) -> str:
+    terminal_width = shutil.get_terminal_size((80, 20)).columns  # fallback = 80
+    centered_lines = []
+    for line in banner_text.splitlines():
+        centered_line = line.center(terminal_width)
+        centered_lines.append(centered_line)
+    return "\n".join(centered_lines)
+
+def display_banner():
+    raw_banner = f"""
+
+ ▌ ▐·      ▪   ▄▄· ▄▄▄ .     ▄▄·  ▄ .▄ ▄▄▄· ▄▄▄▄▄     ▄▄▄· ▪  
+▪█·█▌▪     ██ ▐█ ▌▪▀▄.▀·    ▐█ ▌▪██▪▐█▐█ ▀█ •██      ▐█ ▀█ ██ 
+▐█▐█• ▄█▀▄ ▐█·██ ▄▄▐▀▀▪▄    ██ ▄▄██▀▐█▄█▀▀█  ▐█.▪    ▄█▀▀█ ▐█·
+ ███ ▐█▌.▐▌▐█▌▐███▌▐█▄▄▌    ▐███▌██▌▐▀▐█ ▪▐▌ ▐█▌·    ▐█ ▪▐▌▐█▌
+. ▀   ▀█▄▀▪▀▀▀·▀▀▀  ▀▀▀     ·▀▀▀ ▀▀▀ · ▀  ▀  ▀▀▀      ▀  ▀ ▀▀▀
+
+"""
+    print(center_banner(raw_banner))
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Display banner
+display_banner()
+
+
+def ui_server_logs_enabled() -> bool:
+    return os.getenv("UI_SERVER_LOGS", "true").lower() not in ("false", "0", "no")
+
+
+def _dashboard_api_key_configured(name: str) -> bool:
+    value = (os.getenv(name) or "").strip().lower()
+    return bool(
+        value
+        and value not in {"your_api_key_here", "your-api-key", "your_key_here", "replace_me"}
+    )
+
+
+def _dashboard_model_providers() -> list[tuple[str, str]]:
+    providers = [("free_ai", "Free Ultra-Fast AI (No Key)")]
+    openai_url = os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/")
+    if _dashboard_api_key_configured("OPENAI_API_KEY") or (
+        openai_url and openai_url != "https://api.openai.com/v1/chat/completions"
+    ):
+        providers.append(("openai", "OpenAI"))
+    if any(os.getenv(name) for name in ("OLLAMA_BASE_URL", "OLLAMA_MODEL")) or (
+        os.getenv("MODEL_PROVIDER") == "ollama"
+    ):
+        providers.append(("ollama", "Ollama"))
+    if _dashboard_api_key_configured("XAI_API_KEY"):
+        providers.append(("xai", "xAI"))
+    if _dashboard_api_key_configured("ANTHROPIC_API_KEY"):
+        providers.append(("anthropic", "Anthropic"))
+    return providers
+
+
+def _dashboard_tts_providers() -> list[tuple[str, str]]:
+    providers = [("edge_tts", "Neural Edge-TTS (UZ/RU/EN Free)")]
+    if _dashboard_api_key_configured("OPENAI_API_KEY") or is_custom_openai_tts_url():
+        providers.append(("openai", "OpenAI"))
+    if _dashboard_api_key_configured("XAI_API_KEY"):
+        providers.append(("xai", "xAI Grok TTS"))
+    if _dashboard_api_key_configured("ELEVENLABS_API_KEY"):
+        providers.append(("elevenlabs", "ElevenLabs"))
+    if any(os.getenv(name) for name in ("KOKORO_BASE_URL", "KOKORO_TTS_VOICE")) or (
+        os.getenv("TTS_PROVIDER") == "kokoro"
+    ):
+        providers.append(("kokoro", "Kokoro-TTS"))
+
+    spark_dir = os.getenv("SPARKTTS_MODEL_DIR", "pretrained_models/Spark-TTS-0.5B")
+    spark_configured = os.getenv("SPARKTTS_MODEL_DIR") or (
+        os.getenv("TTS_PROVIDER") == "sparktts"
+    )
+    if spark_configured and all(
+        os.path.isfile(os.path.join(spark_dir, part, "model.safetensors"))
+        for part in ("LLM", "BiCodec")
+    ):
+        providers.append(("sparktts", "Spark-TTS (Local)"))
+    if _dashboard_api_key_configured("TYPECAST_API_KEY"):
+        providers.append(("typecast", "Typecast"))
+    if _dashboard_api_key_configured("SPEECHIFY_API_KEY"):
+        providers.append(("speechify", "Speechify"))
+    return providers
+
+
+def _dashboard_selected_provider(
+    providers: list[tuple[str, str]], configured: str | None
+) -> str:
+    available = [value for value, _ in providers]
+    return configured if configured in available else (available[0] if available else "")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if ui_server_logs_enabled():
+        from .log_stream import install_log_streaming
+
+        install_log_streaming(asyncio.get_running_loop())
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+# Mount static files and templates
+app.mount("/app/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from .elevenlabs_call import router as elevenlabs_call_router, EDGE_TTS_VOICES
+app.include_router(elevenlabs_call_router)
+
+@app.get("/call", response_class=HTMLResponse)
+@app.get("/elevenlabs_call", response_class=HTMLResponse)
+async def get_elevenlabs_call_page(request: Request):
+    chars = ["uzbek_assistant", "ai_call_center"]
+    if os.path.exists(characters_folder):
+        all_chars = sorted([
+            d for d in os.listdir(characters_folder)
+            if os.path.isdir(os.path.join(characters_folder, d))
+        ])
+        for c in all_chars:
+            if c not in chars:
+                chars.append(c)
+    return templates.TemplateResponse(request, "elevenlabs_call.html", {
+        "request": request,
+        "characters": chars,
+        "default_character": os.getenv("CHARACTER_NAME", "uzbek_assistant"),
+        "voices": EDGE_TTS_VOICES,
+    })
+
+@app.get("/", response_class=HTMLResponse)
+async def get_index(request: Request):
+    configured_model_provider = os.getenv("MODEL_PROVIDER")
+    character_name = os.getenv("CHARACTER_NAME", "wizard")
+    configured_tts_provider = os.getenv("TTS_PROVIDER")
+    model_providers = _dashboard_model_providers()
+    tts_providers = _dashboard_tts_providers()
+    model_provider = _dashboard_selected_provider(model_providers, configured_model_provider)
+    tts_provider = _dashboard_selected_provider(tts_providers, configured_tts_provider)
+    openai_tts_voice = os.getenv("OPENAI_TTS_VOICE", "alloy")
+    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    xai_model = normalize_xai_model(os.getenv("XAI_MODEL"))
+    anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
+    voice_speed = os.getenv("VOICE_SPEED", "1.0")
+    elevenlabs_voice = os.getenv("ELEVENLABS_TTS_VOICE")
+    kokoro_voice = os.getenv("KOKORO_TTS_VOICE", "af_bella")
+    xai_tts_voice = os.getenv("XAI_TTS_VOICE", "eve")
+    typecast_voice = os.getenv("TYPECAST_TTS_VOICE")
+    speechify_voice = os.getenv("SPEECHIFY_TTS_VOICE", "geffen_32")
+    faster_whisper_local = os.getenv("FASTER_WHISPER_LOCAL", "true").lower() == "true"
+    ui_server_logs = ui_server_logs_enabled()
+
+    return templates.TemplateResponse(request, "index.html", {
+        "request": request,
+        "model_provider": model_provider,
+        "configured_model_provider": configured_model_provider,
+        "model_providers": model_providers,
+        "character_name": character_name,
+        "tts_provider": tts_provider,
+        "configured_tts_provider": configured_tts_provider,
+        "tts_providers": tts_providers,
+        "openai_tts_voice": openai_tts_voice,
+        "openai_model": openai_model,
+        "xai_model": xai_model,
+        "anthropic_model": anthropic_model,
+        "ollama_model": ollama_model,
+        "voice_speed": voice_speed,
+        "elevenlabs_voice": elevenlabs_voice,
+        "kokoro_voice": kokoro_voice,
+        "xai_tts_voice": xai_tts_voice,
+        "typecast_voice": typecast_voice,
+        "speechify_voice": speechify_voice,
+        "faster_whisper_local": faster_whisper_local,
+        "ui_server_logs": ui_server_logs,
+    })
+
+@app.get("/characters")
+async def get_characters():
+    if not os.path.exists(characters_folder):
+        logger.warning(f"Characters folder not found: {characters_folder}")
+        return {"characters": ["Assistant"]}  # fallback
+    
+    try:
+        character_dirs = [d for d in os.listdir(characters_folder) 
+                        if os.path.isdir(os.path.join(characters_folder, d))]
+        if not character_dirs:
+            logger.warning("No character folders found")
+            return {"characters": ["Assistant"]}  # fallback
+        return {"characters": character_dirs}
+    except Exception as e:
+        logger.error(f"Error listing characters: {e}")
+        return {"characters": ["Assistant"]}  # fallback in case of error
+
+@app.get("/elevenlabs_voices")
+async def get_elevenlabs_voices():
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    voices_file = os.path.join(project_dir, 'elevenlabs_voices.json')
+    example_file = os.path.join(project_dir, 'elevenlabs_voices.json.example')
+    
+    # If the elevenlabs_voices.json file doesn't exist but the example does, create from example
+    if not os.path.exists(voices_file) and os.path.exists(example_file):
+        try:
+            logger.info("elevenlabs_voices.json not found. Creating from example file.")
+            with open(example_file, 'r', encoding='utf-8') as src:
+                with open(voices_file, 'w', encoding='utf-8') as dst:
+                    dst.write(src.read())
+            logger.info("Created elevenlabs_voices.json from example file.")
+        except Exception as e:
+            logger.error(f"Error creating elevenlabs_voices.json: {e}")
+            
+    # If file still doesn't exist, create a minimal version
+    if not os.path.exists(voices_file):
+        try:
+            logger.info("Creating minimal elevenlabs_voices.json.")
+            default_content = {
+                "voices": {},
+                "_comment": "This is a placeholder file. Replace with your own voice IDs from ElevenLabs."
+            }
+            with open(voices_file, 'w', encoding='utf-8') as f:
+                json.dump(default_content, f, indent=2)
+            logger.info("Created minimal elevenlabs_voices.json file.")
+        except Exception as e:
+            logger.error(f"Error creating minimal elevenlabs_voices.json: {e}")
+            return {"voices": []}
+    
+    try:
+        with open(voices_file, 'r', encoding='utf-8') as f:
+            voices = json.load(f)
+        return voices
+    except Exception as e:
+        logger.error(f"Error reading elevenlabs_voices.json: {e}")
+        return {"voices": []}
+
+@app.get("/enhanced", response_class=HTMLResponse)
+async def get_enhanced(request: Request):
+    return templates.TemplateResponse(request, "enhanced.html", {"request": request})
+
+@app.get("/enhanced_defaults")
+async def get_enhanced_defaults():
+    from .enhanced_logic import enhanced_voice, enhanced_model, enhanced_tts_model, enhanced_transcription_model
+    from .shared import get_current_character
+    
+    return {
+        "character": get_current_character(),
+        "voice": enhanced_voice,
+        "model": enhanced_model,
+        "tts_model": enhanced_tts_model,
+        "transcription_model": enhanced_transcription_model
+    }
+
+@app.post("/set_character")
+async def set_character(request: Request):
+    try:
+        data = await request.json()
+        character = data.get("character")
+        if not character:
+            return {"status": "error", "message": "Character name is required"}
+        
+        # Import the set_character function from app_logic
+        from .app_logic import set_api_character
+        from pydantic import BaseModel
+        
+        # Create a model for the function
+        class CharacterModel(BaseModel):
+            character: str
+        
+        # Call the function with the character model
+        result = await set_api_character(CharacterModel(character=character))
+        return result
+    except Exception as e:
+        print(f"Error setting character: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/start_conversation")
+async def start_conversation_route():
+    asyncio.ensure_future(start_conversation())
+    return {"status": "started"}
+
+@app.post("/stop_conversation")
+async def stop_conversation_route():
+    await stop_conversation()
+    return {"status": "stopped"}
+
+@app.post("/start_enhanced_conversation")
+async def start_enhanced_conversation_route(request: Request):
+    data = await request.json()
+    character = data.get("character")
+    speed = data.get("speed")
+    model = data.get("model")
+    voice = data.get("voice")
+    tts_model = data.get("ttsModel")
+    transcription_model = data.get("transcriptionModel")
+    
+    asyncio.create_task(start_enhanced_conversation(
+        character=character,
+        speed=speed,
+        model=model,
+        voice=voice,
+        ttsModel=tts_model,
+        transcriptionModel=transcription_model
+    ))
+    
+    return {"status": "started"}
+
+@app.post("/stop_enhanced_conversation")
+async def stop_enhanced_conversation_route():
+    await stop_enhanced_conversation()
+    return {"status": "stopped"}
+
+@app.post("/pause_enhanced_audio")
+async def pause_enhanced_audio_route():
+    return await pause_enhanced_audio_playback()
+
+@app.post("/resume_enhanced_audio")
+async def resume_enhanced_audio_route():
+    return await resume_enhanced_audio_playback()
+
+@app.post("/clear_history")
+async def clear_history():
+    """Clear the conversation history."""
+    try:
+        # Import with alias to avoid potential shadowing issues
+        from .shared import conversation_history, get_current_character as get_character
+        
+        current_character = get_character()
+        
+        # Check if this is a story or game character
+        is_story_character = current_character.startswith("story_") or current_character.startswith("game_")
+        print(f"Clearing history for {current_character} ({is_story_character=})")
+        
+        # Clear the in-memory history
+        conversation_history.clear()
+        
+        if is_story_character:
+            # Clear character-specific history file
+            character_dir = os.path.join(characters_folder, current_character)
+            history_file = os.path.join(character_dir, "conversation_history.txt")
+            
+            if os.path.exists(history_file):
+                os.remove(history_file)
+                print(f"Deleted character-specific history file for {current_character}")
+            
+            # Write empty history to character-specific file
+            save_character_specific_history(conversation_history, current_character)
+        else:
+            # Clear global history file
+            history_file = "conversation_history.txt"
+            if os.path.exists(history_file):
+                os.remove(history_file)
+                print(f"Deleted global history file")
+            
+            # Write empty history to global file
+            save_conversation_history(conversation_history)
+        
+        return {"status": "cleared"}
+    except Exception as e:
+        print(f"Error clearing history: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/download_history")
+async def download_history():
+    # Create a temporary file with a unique name different from the main history file
+    temp_file = f"temp_download_{uuid.uuid4().hex}.txt"
+    
+    # Format it the same way as the save_conversation_history function in app.py
+    with open(temp_file, "w", encoding="utf-8") as file:
+        for message in conversation_history:
+            role = message["role"].capitalize()
+            content = message["content"]
+            file.write(f"{role}: {content}\n")
+    
+    # Return the file and ensure it will be cleaned up after sending
+    return FileResponse(
+        temp_file,
+        media_type="text/plain",
+        filename="conversation_history.txt",
+        background=BackgroundTask(lambda: os.remove(temp_file) if os.path.exists(temp_file) else None)
+    )
+
+@app.get("/download_enhanced_history")
+async def download_enhanced_history():
+    """Download the conversation history."""
+    try:
+        # Import with alias to avoid potential shadowing issues
+        from .shared import get_current_character as get_character
+        
+        current_character = get_character()
+        
+        # Check if this is a story or game character
+        is_story_character = current_character.startswith("story_") or current_character.startswith("game_")
+        print(f"Downloading history for {current_character} ({is_story_character=})")
+        
+        if is_story_character:
+            # Get from character-specific history file
+            character_dir = os.path.join(characters_folder, current_character)
+            history_file = os.path.join(character_dir, "conversation_history.txt")
+            
+            if not os.path.exists(history_file) or os.path.getsize(history_file) == 0:
+                # Create an empty history file if it doesn't exist
+                with open(history_file, "w", encoding="utf-8") as f:
+                    f.write(f"No conversation history found for {current_character}.\n")
+                
+            # Generate download filename based on character
+            download_filename = f"{current_character}_history.txt"
+            
+            return FileResponse(
+                history_file,
+                media_type="text/plain",
+                filename=download_filename
+            )
+        else:
+            # Get from global history file
+            history_file = "conversation_history.txt"
+            
+            if not os.path.exists(history_file) or os.path.getsize(history_file) == 0:
+                # Create an empty history file if it doesn't exist
+                with open(history_file, "w", encoding="utf-8") as f:
+                    f.write("No conversation history found.\n")
+            
+            return FileResponse(
+                history_file,
+                media_type="text/plain",
+                filename="conversation_history.txt"
+            )
+    except Exception as e:
+        print(f"Error downloading history: {e}")
+        return PlainTextResponse(f"Error downloading history: {str(e)}", status_code=500)
+
+@app.post("/set_transcription_model")
+async def update_transcription_model(request: Request):
+    data = await request.json()
+    model_name = data.get("model")
+    if not model_name:
+        return {"status": "error", "message": "Model name is required"}
+    
+    return set_transcription_model(model_name)
+
+@app.get("/ollama_models")
+async def get_ollama_models():
+    """
+    Fetch available models from Ollama
+    """
+    return await fetch_ollama_models()
+
+@app.post("/openai_realtime_proxy")
+async def proxy_openai_realtime(request: Request):
+    """
+    Create a GA OpenAI Realtime WebRTC call without exposing the API key.
+    """
+    try:
+        # Get the SDP from the request body
+        body = await request.body()
+        sdp = body.decode("utf-8")
+        if not sdp.strip():
+            raise HTTPException(status_code=400, detail="An SDP offer is required")
+
+        provider = normalize_realtime_provider(
+            os.getenv("OPENAI_REALTIME_PROVIDER", DEFAULT_REALTIME_PROVIDER)
+        )
+        import httpx
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            if provider == "local":
+                calls_url = normalize_local_realtime_url(
+                    os.getenv("LOCAL_REALTIME_URL", DEFAULT_LOCAL_REALTIME_CALLS_URL)
+                )
+                logger.info(f"Proxying WebRTC connection to local Realtime server: {calls_url}")
+                response = await client.post(
+                    calls_url,
+                    content=sdp,
+                    headers={"Content-Type": "application/sdp"},
+                )
+                call_id = extract_local_realtime_call_id(
+                    response.headers.get("location"), calls_url
+                )
+            else:
+                from .elevenlabs_call import get_active_openai_key
+                api_key = get_active_openai_key()
+                if not api_key:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="OpenAI API key not configured",
+                    )
+
+                configured_model = os.getenv(
+                    "OPENAI_REALTIME_MODEL", DEFAULT_OPENAI_REALTIME_MODEL
+                )
+                model = normalize_openai_realtime_model(
+                    request.query_params.get("model", configured_model)
+                )
+                voice = request.query_params.get("voice")
+                session = build_openai_realtime_session(model, voice)
+                logger.info(
+                    f"Proxying WebRTC connection to OpenAI Realtime API for model: {model}"
+                )
+                response = await client.post(
+                    OPENAI_REALTIME_CALLS_URL,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    files={
+                        "sdp": (None, sdp, "application/sdp"),
+                        "session": (None, json.dumps(session), "application/json"),
+                    },
+                )
+                call_id = None
+
+            response_headers = {}
+            if call_id:
+                response_headers["X-Realtime-Call-Id"] = call_id
+
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type=response.headers.get("content-type", "application/sdp"),
+                headers=response_headers,
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error proxying to OpenAI: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error proxying to OpenAI: {str(e)}",
+        ) from e
+
+
+@app.delete("/openai_realtime_proxy/{call_id}")
+async def close_local_realtime_call(call_id: str):
+    """Explicitly release a local Realtime pipeline using its Location call ID."""
+    provider = normalize_realtime_provider(
+        os.getenv("OPENAI_REALTIME_PROVIDER", DEFAULT_REALTIME_PROVIDER)
+    )
+    if provider != "local":
+        raise HTTPException(status_code=404, detail="Local Realtime is not enabled")
+
+    try:
+        calls_url = normalize_local_realtime_url(
+            os.getenv("LOCAL_REALTIME_URL", DEFAULT_LOCAL_REALTIME_CALLS_URL)
+        )
+        call_url = build_local_realtime_call_url(calls_url, call_id)
+
+        import httpx
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+            response = await client.delete(call_url)
+
+        if response.status_code in {200, 202, 204, 404, 410}:
+            return Response(status_code=204)
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type", "application/json"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Error closing local Realtime call: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error closing local Realtime call: {str(exc)}",
+        ) from exc
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    add_client(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            if message["action"] == "stop":
+                await stop_conversation()
+            elif message["action"] == "pause_audio":
+                await pause_audio_playback()
+            elif message["action"] == "resume_audio":
+                await resume_audio_playback()
+            elif message["action"] == "start":
+                selected_character = message["character"]
+                await stop_conversation()  # Ensure any running conversation stops
+                set_current_character(selected_character)
+                await start_conversation()
+            elif message["action"] == "set_character":
+                set_current_character(message["character"])
+                await websocket.send_json({"message": f"Character: {message['character']}"})
+            elif message["action"] == "set_provider":
+                set_env_variable("MODEL_PROVIDER", message["provider"])
+            elif message["action"] == "set_tts":
+                set_env_variable("TTS_PROVIDER", message["tts"])
+            elif message["action"] == "set_openai_voice":
+                set_env_variable("OPENAI_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_openai_model":
+                set_env_variable("OPENAI_MODEL", message["model"])
+            elif message["action"] == "set_ollama_model":
+                set_env_variable("OLLAMA_MODEL", message["model"])
+            elif message["action"] == "set_xai_model":
+                set_env_variable("XAI_MODEL", message["model"])
+            elif message["action"] == "set_anthropic_model":
+                set_env_variable("ANTHROPIC_MODEL", message["model"])
+            elif message["action"] == "set_voice_speed":
+                set_env_variable("VOICE_SPEED", message["speed"])
+            elif message["action"] == "set_elevenlabs_voice":
+                set_env_variable("ELEVENLABS_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_kokoro_voice":
+                set_env_variable("KOKORO_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_xai_tts_voice":
+                set_env_variable("XAI_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_typecast_voice":
+                set_env_variable("TYPECAST_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_speechify_voice":
+                set_env_variable("SPEECHIFY_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_edge_tts_voice":
+                set_env_variable("EDGE_TTS_VOICE", message["voice"])
+            elif message["action"] == "set_free_ai_model":
+                set_env_variable("FREE_AI_MODEL", message["model"])
+            elif message["action"] == "clear":
+                conversation_history.clear()
+                await websocket.send_json({"message": "Conversation history cleared."})
+    except WebSocketDisconnect:
+        remove_client(websocket)
+        logger.info(f"Client disconnected from standard websocket")
+    except Exception as e:
+        logger.error(f"Error in standard websocket: {e}")
+        # Still remove the client to prevent resource leaks
+        remove_client(websocket)
+
+@app.websocket("/ws/logs")
+async def websocket_logs_endpoint(websocket: WebSocket):
+    if not ui_server_logs_enabled():
+        # Accept then close cleanly — rejecting before accept spams 403 in uvicorn logs.
+        await websocket.accept()
+        try:
+            await websocket.send_json({"action": "log_stream_disabled"})
+        except Exception:
+            pass
+        await websocket.close(code=1000, reason="Server logs disabled")
+        return
+
+    from .log_stream import add_log_client, remove_log_client, send_log_history
+
+    await websocket.accept()
+    add_log_client(websocket)
+    try:
+        await send_log_history(websocket)
+        while True:
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if message.get("action") == "ping":
+                await websocket.send_json({"action": "pong"})
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from server logs websocket")
+    except Exception as e:
+        logger.error(f"Error in server logs websocket: {e}")
+    finally:
+        remove_log_client(websocket)
+
+@app.websocket("/ws_enhanced")
+async def websocket_enhanced_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    
+    # Add client to the list
+    add_client(websocket)
+    print(f"Enhanced WebSocket client {id(websocket)} connected")
+    logging.info("connection open")
+    
+    # Notify client they are connected successfully
+    try:
+        await websocket.send_json({"action": "connected"})
+    except:
+        pass
+    
+    try:
+        # Process messages from the client
+        while True:
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                if message.get("action") == "ping":
+                    # Respond to heartbeats
+                    await websocket.send_json({"action": "pong"})
+            except json.JSONDecodeError:
+                # Not a JSON message
+                pass
+                
+    except WebSocketDisconnect:
+        logging.info("Client disconnected from enhanced websocket")
+    except Exception as e:
+        logging.error(f"Error in enhanced websocket: {e}")
+    finally:
+        # Remove client from the list on any error or disconnect
+        remove_client(websocket)
+        print(f"Enhanced WebSocket client {id(websocket)} disconnected")
+
+# WebRTC OpenAI Realtime route (direct WebRTC implementation)
+@app.get("/webrtc_realtime")
+async def get_webrtc_realtime(request: Request):
+    """
+    Serves the WebRTC implementation of OpenAI Realtime API page.
+    """
+    try:
+        # Get characters from characters folder
+        characters = []
+        if os.path.exists(characters_folder):
+            characters = [d for d in os.listdir(characters_folder) 
+                        if os.path.isdir(os.path.join(characters_folder, d))]
+        
+        # Provide a fallback if no characters found
+        if not characters:
+            characters = ["assistant"]
+            logger.warning("No character folders found, using fallback assistant")
+        
+        realtime_provider = normalize_realtime_provider(
+            os.getenv("OPENAI_REALTIME_PROVIDER", DEFAULT_REALTIME_PROVIDER)
+        )
+        if realtime_provider == "local":
+            realtime_model = "local"
+            realtime_voice = normalize_local_realtime_voice(
+                os.getenv("LOCAL_REALTIME_VOICE", DEFAULT_LOCAL_REALTIME_VOICE)
+            )
+            realtime_vad_threshold = normalize_local_realtime_vad_threshold(
+                os.getenv(
+                    "LOCAL_REALTIME_VAD_THRESHOLD",
+                    str(DEFAULT_LOCAL_REALTIME_VAD_THRESHOLD),
+                )
+            )
+            realtime_silence_ms = normalize_local_realtime_silence_ms(
+                os.getenv(
+                    "LOCAL_REALTIME_SILENCE_MS",
+                    str(DEFAULT_LOCAL_REALTIME_SILENCE_MS),
+                )
+            )
+            realtime_voices = [
+                {"value": voice, "label": voice.replace("_", " ")}
+                for voice in LOCAL_REALTIME_VOICES
+            ]
+        else:
+            realtime_model = normalize_openai_realtime_model(
+                os.getenv("OPENAI_REALTIME_MODEL", DEFAULT_OPENAI_REALTIME_MODEL)
+            )
+            realtime_voice = DEFAULT_OPENAI_REALTIME_VOICE
+            realtime_vad_threshold = None
+            realtime_silence_ms = None
+            realtime_voices = [
+                {"value": "marin", "label": "Marin - recommended"},
+                {"value": "cedar", "label": "Cedar - recommended"},
+                {"value": "alloy", "label": "Alloy - female"},
+                {"value": "ash", "label": "Ash - male"},
+                {"value": "ballad", "label": "Ballad - male"},
+                {"value": "coral", "label": "Coral - female"},
+                {"value": "echo", "label": "Echo - male"},
+                {"value": "sage", "label": "Sage - female"},
+                {"value": "shimmer", "label": "Shimmer - female"},
+                {"value": "verse", "label": "Verse - male"},
+            ]
+
+        realtime_config = {
+            "provider": realtime_provider,
+            "model": realtime_model,
+            "voice": realtime_voice,
+            "vadThreshold": realtime_vad_threshold,
+            "silenceDurationMs": realtime_silence_ms,
+        }
+            
+        return templates.TemplateResponse(
+            request,
+            "webrtc_realtime.html", 
+            {
+                "request": request,
+                "characters": characters,
+                "realtime_model": realtime_model,
+                "realtime_provider": realtime_provider,
+                "realtime_voice": realtime_voice,
+                "realtime_voices": realtime_voices,
+                "realtime_config": realtime_config,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error rendering WebRTC Realtime page: {e}")
+        # Fallback with minimal context
+        return templates.TemplateResponse(
+            request,
+            "webrtc_realtime.html", 
+            {
+                "request": request,
+                "characters": ["assistant"],
+                "realtime_model": DEFAULT_OPENAI_REALTIME_MODEL,
+                "realtime_provider": DEFAULT_REALTIME_PROVIDER,
+                "realtime_voice": DEFAULT_OPENAI_REALTIME_VOICE,
+                "realtime_voices": [
+                    {"value": DEFAULT_OPENAI_REALTIME_VOICE, "label": "Marin - recommended"}
+                ],
+                "realtime_config": {
+                    "provider": DEFAULT_REALTIME_PROVIDER,
+                    "model": DEFAULT_OPENAI_REALTIME_MODEL,
+                    "voice": DEFAULT_OPENAI_REALTIME_VOICE,
+                    "vadThreshold": None,
+                    "silenceDurationMs": None,
+                },
+            }
+        )
+
+@app.get("/api/character/{character_name}")
+async def get_character_prompt(character_name: str):
+    """
+    Get the prompt for a specific character
+    """
+    try:
+        prompt = load_character_prompt(character_name)
+        return {"prompt": prompt}
+    except Exception as e:
+        logger.error(f"Error loading character prompt: {e}")
+        return {"error": str(e)}
+
+@app.get("/get_character_history")
+async def get_character_history():
+    """Get conversation history for currently selected character."""
+    try:
+        # Import with alias to avoid potential shadowing issues
+        from .shared import get_current_character as get_character
+        
+        current_character = get_character()
+        
+        # Check if this is a story or game character
+        is_story_character = current_character.startswith("story_") or current_character.startswith("game_")
+        print(f"Getting history for {current_character} ({is_story_character=})")
+        
+        if is_story_character:
+            # Get from character-specific history file
+            character_dir = os.path.join(characters_folder, current_character)
+            history_file = os.path.join(character_dir, "conversation_history.txt")
+            
+            if os.path.exists(history_file) and os.path.getsize(history_file) > 0:
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    history_text = f.read()
+                try:
+                    from .app import format_story_response_text
+                    repaired_lines = []
+                    for line in history_text.splitlines():
+                        if line.startswith("Assistant:"):
+                            repaired_lines.append("Assistant: " + format_story_response_text(line[10:].strip()))
+                        else:
+                            repaired_lines.append(line)
+                    history_text = "\n".join(repaired_lines)
+                except Exception as e:
+                    logger.warning(f"Could not repair character history display text: {e}")
+                return {"status": "success", "history": history_text, "character": current_character}
+            else:
+                return {"status": "empty", "history": "", "character": current_character}
+        else:
+            # For non-story characters, return empty history
+            return {"status": "not_story_character", "history": "", "character": current_character}
+    except Exception as e:
+        print(f"Error getting character history: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+DEFAULT_OPENAI_TTS_SPEECH_URL = "https://api.openai.com/v1/audio/speech"
+
+
+def openai_tts_speech_url() -> str:
+    return os.getenv("OPENAI_TTS_URL", DEFAULT_OPENAI_TTS_SPEECH_URL).strip()
+
+
+def is_custom_openai_tts_url(url: str | None = None) -> bool:
+    speech_url = (url or openai_tts_speech_url()).rstrip("/").lower()
+    default_url = DEFAULT_OPENAI_TTS_SPEECH_URL.rstrip("/").lower()
+    return speech_url != default_url
+
+
+def openai_tts_api_base(url: str | None = None) -> str:
+    """Derive API base (…/v1) from OPENAI_TTS_URL."""
+    speech_url = (url or openai_tts_speech_url()).rstrip("/")
+    for suffix in ("/audio/speech", "/v1/audio/speech"):
+        if speech_url.lower().endswith(suffix):
+            return speech_url[: -len(suffix)]
+    if speech_url.lower().endswith("/v1"):
+        return speech_url
+    return speech_url
+
+
+def _normalize_kokoro_voice_entries(data) -> list[dict]:
+    """Normalize Kokoro /audio/voices payloads (legacy strings or v0.4+ id/name objects)."""
+    raw = data.get("voices", []) if isinstance(data, dict) else []
+    if not isinstance(raw, list):
+        return []
+
+    entries = []
+    for item in raw:
+        if isinstance(item, str):
+            entries.append({"id": item, "label": item})
+        elif isinstance(item, dict):
+            voice_id = item.get("id") or item.get("voice_id") or item.get("voice")
+            if not voice_id:
+                voice_id = item.get("name")
+            if not voice_id:
+                continue
+            voice_id = str(voice_id)
+            label = item.get("name") or item.get("label") or item.get("display_name") or voice_id
+            entries.append({"id": voice_id, "label": str(label)})
+    return entries
+
+
+def _build_kokoro_voice_dropdown(entries: list[dict]) -> list[dict]:
+    """Build UI voice options from normalized Kokoro voice entries."""
+    language_codes = {
+        "a": "American English",
+        "b": "British English",
+        "e": "European Spanish",
+        "f": "French",
+        "g": "German",
+        "h": "Hindi",
+        "i": "Italian",
+        "j": "Japanese",
+        "k": "Korean",
+        "p": "Polish",
+        "r": "Russian",
+        "s": "Spanish",
+        "z": "Chinese",
+    }
+
+    labels_by_id = {entry["id"]: entry["label"] for entry in entries}
+    voice_ids = [entry["id"] for entry in entries]
+
+    english_voices = []
+    other_voices_by_language = {}
+    unknown_voices = []
+
+    for voice_id in voice_ids:
+        if "+" in voice_id:
+            unknown_voices.append(voice_id)
+            continue
+        parts = voice_id.split("_")
+        if len(parts) >= 2:
+            accent_code = parts[0][:1]
+            if accent_code not in language_codes:
+                unknown_voices.append(voice_id)
+            elif accent_code in ["a", "b"]:
+                english_voices.append(voice_id)
+            else:
+                other_voices_by_language.setdefault(accent_code, []).append(voice_id)
+        else:
+            unknown_voices.append(voice_id)
+
+    english_voices.sort()
+    for lang in other_voices_by_language:
+        other_voices_by_language[lang].sort()
+    unknown_voices.sort()
+
+    voices = []
+
+    for voice_id in english_voices:
+        parts = voice_id.split("_")
+        if len(parts) >= 2:
+            lang_code = parts[0]
+            name = parts[1].capitalize()
+            accent_code = lang_code[:1]
+            gender_code = lang_code[1:2]
+            gender = "Female" if gender_code == "f" else "Male"
+            accent_label = f" - {language_codes.get(accent_code, 'Unknown')}"
+            voices.append({"id": voice_id, "name": f"{name} ({gender}){accent_label}"})
+
+    for lang in sorted(other_voices_by_language.keys()):
+        if other_voices_by_language[lang]:
+            language_name = language_codes.get(lang, "Unknown Language")
+            voices.append({"id": f"separator_{lang}", "name": f"--- {language_name} Voices ---"})
+            for voice_id in other_voices_by_language[lang]:
+                parts = voice_id.split("_")
+                if len(parts) >= 2:
+                    name = parts[1].capitalize()
+                    gender_code = parts[0][1:2]
+                    gender = "Female" if gender_code == "f" else "Male"
+                    voices.append({"id": voice_id, "name": f"{name} ({gender})"})
+
+    if unknown_voices:
+        voices.append({"id": "separator_unknown", "name": "--- Other Voices ---"})
+        for voice_id in unknown_voices:
+            label = labels_by_id.get(voice_id, voice_id)
+            voices.append({"id": voice_id, "name": label})
+
+    return voices
+
+
+def _ensure_kokoro_configured_voice(voices: list[dict], configured_voice: str | None) -> list[dict]:
+    """Ensure KOKORO_TTS_VOICE appears in the dropdown (e.g. af_bella+af_sky mixes)."""
+    configured_voice = (configured_voice or "").strip()
+    if not configured_voice:
+        return voices
+    if any(voice.get("id") == configured_voice for voice in voices):
+        return voices
+
+    result = list(voices)
+    has_other_section = any(voice.get("id") == "separator_unknown" for voice in result)
+    if not has_other_section:
+        result.append({"id": "separator_unknown", "name": "--- Other Voices ---"})
+    result.append({"id": configured_voice, "name": configured_voice})
+    return result
+
+
+def _parse_openai_compatible_voices(data) -> list[dict]:
+    """Normalize voice list payloads from OpenAI-compatible TTS servers."""
+    voices = []
+    raw = data.get("voices") if isinstance(data, dict) else None
+    if raw is None and isinstance(data, dict):
+        raw = data.get("data")
+    if not isinstance(raw, list):
+        return voices
+
+    for item in raw:
+        if isinstance(item, str):
+            voices.append({"id": item, "name": item})
+        elif isinstance(item, dict):
+            voice_id = (
+                item.get("id")
+                or item.get("voice_id")
+                or item.get("voice")
+                or item.get("name")
+            )
+            if not voice_id:
+                continue
+            voice_id = str(voice_id)
+            name = item.get("name") or item.get("label") or item.get("display_name") or voice_id
+            voices.append({"id": voice_id, "name": str(name)})
+
+    return sorted(voices, key=lambda v: v["name"].lower())
+
+
+@app.get("/openai_tts_voices")
+async def get_openai_tts_voices():
+    """List TTS voices from a custom OPENAI_TTS_URL server (e.g. Qwen3)."""
+    if not is_custom_openai_tts_url():
+        return {"local": False, "voices": []}
+
+    base = openai_tts_api_base()
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    candidate_urls = [f"{base}/voices", f"{base}/audio/voices"]
+    connector = aiohttp.TCPConnector(ssl=False)
+
+    try:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            last_error = None
+            for voices_url in candidate_urls:
+                try:
+                    async with session.get(voices_url, headers=headers, timeout=5) as response:
+                        if response.status != 200:
+                            last_error = f"HTTP {response.status} from {voices_url}"
+                            continue
+                        data = await response.json()
+                        voices = _parse_openai_compatible_voices(data)
+                        if voices:
+                            return {"local": True, "voices": voices, "source": voices_url}
+                        last_error = f"No voices in response from {voices_url}"
+                except aiohttp.ClientConnectorError:
+                    last_error = f"Server not reachable at {voices_url}"
+                except asyncio.TimeoutError:
+                    last_error = f"Timeout connecting to {voices_url}"
+
+            logger.info(
+                "Custom OpenAI TTS URL configured but no voices returned (%s)",
+                last_error or "unknown",
+            )
+            return {"local": True, "voices": [], "error": last_error or "No voices found"}
+    except Exception as e:
+        logger.error(f"Error fetching custom OpenAI TTS voices: {e}")
+        return {"local": True, "voices": [], "error": str(e)}
+
+
+@app.get("/kokoro_voices")
+async def get_kokoro_voices():
+    try:
+        # Get the base URL from environment or use default
+        kokoro_base_url = os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1")
+        
+        # Get authentication credentials
+        kokoro_username = os.getenv("KOKORO_USERNAME", "")
+        kokoro_password = os.getenv("KOKORO_PASSWORD", "")
+        
+        # Prepare auth headers if credentials are provided
+        headers = {}
+        if kokoro_username and kokoro_password:
+            import base64
+            auth_str = f"{kokoro_username}:{kokoro_password}"
+            auth_bytes = auth_str.encode('ascii')
+            base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+            headers["Authorization"] = f"Basic {base64_auth}"
+        
+        try:
+            voices_base_url = f"{kokoro_base_url}/audio/voices"
+            voice_list_urls = [voices_base_url]
+            if os.getenv("KOKORO_VOICES_LEGACY", "").lower() not in ("true", "1", "yes"):
+                voice_list_urls.append(f"{voices_base_url}?legacy=true")
+            else:
+                voice_list_urls = [f"{voices_base_url}?legacy=true", voices_base_url]
+
+            connector = aiohttp.TCPConnector(ssl=False)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                try:
+                    last_error = None
+                    for voices_url in voice_list_urls:
+                        async with session.get(voices_url, headers=headers, timeout=3) as response:
+                            if response.status != 200:
+                                error_text = await response.text()
+                                last_error = f"HTTP {response.status} - {error_text}"
+                                continue
+                            data = await response.json()
+                            entries = _normalize_kokoro_voice_entries(data)
+                            if not entries:
+                                last_error = "No voices in response"
+                                continue
+                            voices = _build_kokoro_voice_dropdown(entries)
+                            voices = _ensure_kokoro_configured_voice(
+                                voices, os.getenv("KOKORO_TTS_VOICE")
+                            )
+                            return {"voices": voices}
+
+                    logger.error(f"Error fetching Kokoro voices: {last_error or 'unknown'}")
+                    return {"voices": [], "error": last_error or "No voices found"}
+                except aiohttp.ClientConnectorError as e:
+                    # Handle connection errors specifically (server not available)
+                    logger.info(f"Kokoro server not available at {kokoro_base_url} - This is normal if you don't have Kokoro running")
+                    return {"voices": [], "error": "Kokoro server not available"}
+                except asyncio.TimeoutError:
+                    # Handle timeout errors
+                    # logger.info(f"Timeout connecting to Kokoro server at {kokoro_base_url}")
+                    return {"voices": [], "error": "Connection timeout"}
+            
+        except Exception as e:
+            # Log the error and return empty voices with error message
+            logger.error(f"Error fetching Kokoro voices: {str(e)}")
+            return {"voices": [], "error": str(e)}
+            
+    except Exception as e:
+        logger.error(f"Critical error in get_kokoro_voices: {str(e)}")
+        return {"voices": [], "error": str(e)}
+
+@app.get("/typecast_voices")
+async def get_typecast_voices():
+    try:
+        from typecast import Typecast
+
+        api_key = os.getenv("TYPECAST_API_KEY")
+        if not api_key:
+            return {"voices": [], "error": "TYPECAST_API_KEY not set"}
+
+        client = Typecast(api_key=api_key)
+        model_filter = os.getenv("TYPECAST_TTS_MODEL")
+
+        def _list_voices():
+            return client.voices(model=model_filter) if model_filter else client.voices()
+
+        voice_list = await asyncio.to_thread(_list_voices)
+        voices = [
+            {"id": v.voice_id, "name": v.voice_name or v.voice_id}
+            for v in voice_list
+        ]
+
+        return {"voices": voices}
+    except ImportError:
+        return {"voices": [], "error": "typecast-python package is not installed"}
+    except Exception as e:
+        logger.error(f"Error fetching Typecast voices: {str(e)}")
+        return {"voices": [], "error": str(e)}
+
+def _speechify_voice_options(voice_list) -> list[dict]:
+    """Turn GET /v1/voices entries into dashboard dropdown options."""
+    voices = []
+    seen_labels = set()
+    for voice in voice_list:
+        voice_id = voice.get("id")
+        if not voice_id:
+            continue
+        name = voice.get("display_name") or voice_id
+        details = ", ".join(
+            part for part in (voice.get("locale"), voice.get("gender")) if part
+        )
+        label = f"{name} ({details})" if details else name
+        if voice.get("type") == "personal":
+            label = f"{label} - your voice"
+        if label in seen_labels:
+            label = f"{label} [{voice_id}]"
+        seen_labels.add(label)
+        voices.append({"id": voice_id, "name": label})
+    return voices
+
+
+@app.get("/speechify_voices")
+async def get_speechify_voices():
+    api_key = os.getenv("SPEECHIFY_API_KEY")
+    if not _dashboard_api_key_configured("SPEECHIFY_API_KEY"):
+        return {"voices": [], "error": "SPEECHIFY_API_KEY not set"}
+
+    base_url = os.getenv("SPEECHIFY_BASE_URL", "https://api.speechify.ai").rstrip("/")
+    model = os.getenv("SPEECHIFY_TTS_MODEL", "simba-3.5")
+    headers = {"Authorization": f"Bearer {api_key}", **speechify_caller_headers()}
+    params = {"model": model, "limit": "200"}
+    voice_list = []
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Newer API versions return {"voices": [...], "next_cursor": ...};
+            # older ones return a plain list. Handle both.
+            for _ in range(20):
+                async with session.get(
+                    f"{base_url}/v1/voices", headers=headers, params=params
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(
+                            f"Error fetching Speechify voices: HTTP {response.status} - {error_text}"
+                        )
+                        return {"voices": [], "error": f"HTTP {response.status}"}
+                    data = await response.json()
+
+                if isinstance(data, list):
+                    voice_list.extend(data)
+                    break
+                voice_list.extend(data.get("voices") or [])
+                next_cursor = data.get("next_cursor")
+                if not data.get("has_more") or not next_cursor:
+                    break
+                params = {**params, "cursor": next_cursor}
+
+        return {"voices": _speechify_voice_options(voice_list)}
+    except Exception as e:
+        logger.error(f"Error fetching Speechify voices: {str(e)}")
+        return {"voices": [], "error": str(e)}
+
+def signal_handler(sig, frame):
+    print('\nShutting down gracefully... Press Ctrl+C again to force exit')
+    
+    try:
+        try:
+            from .app import request_audio_playback_stop
+            request_audio_playback_stop()
+            try:
+                from . import app_logic
+                app_logic.continue_conversation = False
+            except Exception as e:
+                print(f"Error stopping dashboard conversation loop: {e}")
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"Error stopping audio playback: {e}")
+
+        # Stop any active enhanced conversation
+        try:
+            # For async shutdown in sync context, create a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # First stop any active conversations
+            from .enhanced_logic import enhanced_conversation_active, stop_enhanced_conversation
+            if enhanced_conversation_active:
+                print("Stopping active enhanced conversation...")
+                loop.run_until_complete(stop_enhanced_conversation())
+                
+            # Then close all WebSocket connections
+            for client in list(clients):  # Create a copy of the clients set to avoid modification during iteration
+                try:
+                    if hasattr(client, 'close'):
+                        # Use the same loop for consistency
+                        loop.run_until_complete(client.close())
+                except Exception as e:
+                    print(f"Error closing client: {e}")
+
+            if ui_server_logs_enabled():
+                from .log_stream import close_log_clients
+                loop.run_until_complete(close_log_clients())
+                    
+            loop.close()
+        except Exception as e:
+            print(f"Error in graceful shutdown: {e}")
+        
+        print("Shutdown procedures completed. Exiting...")
+        import os
+        os._exit(0)  # Force exit as sys.exit() might not work if asyncio is running
+        
+    except Exception as e:
+        print(f"Error during shutdown: {e}")
+        import os
+        os._exit(1)  # Error exit code
+
+if __name__ == "__main__":
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        print("Starting server. Press Ctrl+C to exit.")
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    except KeyboardInterrupt:
+        print("\nServer stopped by keyboard interrupt.")
+    finally:
+        print("Shutdown complete.")

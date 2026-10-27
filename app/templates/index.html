@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en" class="{% if ui_server_logs %}has-server-logs{% endif %}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="default-character" content="{{ character_name }}">
+    <meta name="ui-server-logs" content="{{ 'true' if ui_server_logs else 'false' }}">
+    <title>Voice Chat AI</title>
+    <link rel="stylesheet" href="/app/static/css/styles.css">
+    <link rel="icon" href="/app/static/favicon.ico" type="image/x-icon">
+    <meta name="description" content="Voice Chat AI application">
+    <meta name="keywords" content="AI, Voice, Chat, OpenAI, Ollama">
+    <meta name="author" content="bigsk1">
+    <style>
+        /* Mobile responsiveness */
+        @media (max-width: 768px) {
+            .container {
+                padding: 5px;
+            }
+            
+            header {
+                flex-direction: column;
+                padding: 10px 5px;
+            }
+            
+            .header-controls {
+                margin-top: 10px;
+                width: 100%;
+                justify-content: space-between;
+                display: flex;
+                flex-direction: row;
+            }
+            
+            .header-controls .button-group {
+                display: flex;
+                gap: 10px;
+                margin-left: 10px;
+            }
+            
+            .header-controls .main-nav {
+                margin-left: 0;
+                margin-right: 5px;
+            }
+        }
+        
+        /* Small phone styles */
+        @media (max-width: 480px) {
+            body {
+                font-size: 14px;
+            }
+            
+            h1 {
+                font-size: 1.3rem;
+            }
+            
+            .container {
+                padding: 5px;
+            }
+        }
+        .header-controls #theme-toggle {
+            margin-top: 12px;
+        }
+        .header-controls #download-button {
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body class="dark-mode{% if ui_server_logs %} has-server-logs{% endif %}">
+    <header>
+        <h1>
+            Voice Chat AI
+            <div id="mic-icon" class="mic-off">&#x1F399;</div>
+        </h1>
+        <div class="header-controls">
+            <div class="button-group">
+                <button id="theme-toggle" aria-label="Toggle dark/light mode">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-moon">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+                <button id="download-button" aria-label="Download conversation history" title="Download conversation history">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-download">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                </button>
+            </div>
+            <nav class="main-nav">
+                <ul>
+                    <li><a href="/" class="active">Dashboard</a></li>
+                    <li><a href="/call" style="color: #06b6d4; font-weight: bold;">🔥 ElevenLabs Call Mode</a></li>
+                    <li><a href="/enhanced">Enhanced</a></li>
+                    <li><a href="/webrtc_realtime">Realtime</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+    <main>
+        <div id="conversation">
+            <div id="messages"></div>
+            <div id="voice-animation" class="hidden">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8" />
+                    <g id="voice-bars">
+                        <rect x="30" y="35" width="8" height="30" rx="4" />
+                        <rect x="46" y="25" width="8" height="50" rx="4" />
+                        <rect x="62" y="35" width="8" height="30" rx="4" />
+                    </g>
+                </svg>
+            </div>
+        </div>
+        <div class="controls">
+            <button id="start-conversation-btn" disabled>Start</button>
+            <button id="pause-audio-btn" disabled>Pause</button>
+            <button id="stop-conversation-btn">Stop</button>
+            <button id="clear-conversation-btn">Clear</button>
+        </div>
+        <div class="settings">
+            <section class="settings-section" aria-labelledby="conversation-settings-title">
+                <div class="settings-section-heading">
+                    <h2 id="conversation-settings-title">Conversation</h2>
+                    <p>Choose who you talk with and which model replies.</p>
+                </div>
+                <div class="settings-grid">
+                    <div class="setting-group setting-group-wide">
+                        <label for="character-select">* Character:</label>
+                        <select id="character-select"></select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="provider-select">* Model Provider:</label>
+                        <select id="provider-select" data-initial="{{ model_provider }}" data-configured="{{ configured_model_provider or '' }}" {% if not model_providers %}disabled{% endif %}>
+                            {% for value, label in model_providers %}
+                            <option value="{{ value }}" {% if value == model_provider %}selected{% endif %}>{{ label }}</option>
+                            {% else %}
+                            <option value="">Configure a model provider in .env</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="model-select">* Model:</label>
+                        <select id="model-select" disabled>
+                            <option value="">Select a model provider</option>
+                        </select>
+                        <small id="model-hint" class="setting-hint" aria-live="polite"></small>
+                    </div>
+                </div>
+            </section>
+
+            <section class="settings-section" aria-labelledby="speech-settings-title">
+                <div class="settings-section-heading">
+                    <h2 id="speech-settings-title">Speech</h2>
+                    <p>Pick a voice that belongs to the selected TTS provider.</p>
+                </div>
+                <div class="settings-grid">
+                    <div class="setting-group">
+                        <label for="tts-select">* TTS Provider:</label>
+                        <select id="tts-select" data-initial="{{ tts_provider }}" data-configured="{{ configured_tts_provider or '' }}" {% if not tts_providers %}disabled{% endif %}>
+                            {% for value, label in tts_providers %}
+                            <option value="{{ value }}" {% if value == tts_provider %}selected{% endif %}>{{ label }}</option>
+                            {% else %}
+                            <option value="">Configure a TTS provider in .env</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="voice-select">Voice:</label>
+                        <select id="voice-select" disabled>
+                            <option value="">Select a TTS provider</option>
+                        </select>
+                        <small id="voice-hint" class="setting-hint" aria-live="polite"></small>
+                    </div>
+                    <div class="setting-group">
+                        <label for="voice-speed-select">Voice Speed:</label>
+                        <select id="voice-speed-select">
+                            <option value="0.7" {% if voice_speed == '0.7' %}selected{% endif %}>0.7</option>
+                            <option value="0.9" {% if voice_speed == '0.9' %}selected{% endif %}>0.9</option>
+                            <option value="1.0" {% if voice_speed == '1.0' %}selected{% endif %}>1.0 (Normal)</option>
+                            <option value="1.1" {% if voice_speed == '1.1' %}selected{% endif %}>1.1</option>
+                            <option value="1.2" {% if voice_speed == '1.2' %}selected{% endif %}>1.2</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="transcription-select">Transcription:</label>
+                        <select id="transcription-select">
+                            {% if faster_whisper_local %}
+                            <option value="local_whisper" selected>Local Faster Whisper</option>
+                            <option value="gpt-4o-mini-transcribe">OpenAI GPT-4o Mini</option>
+                            <option value="gpt-4o-transcribe">OpenAI GPT-4o</option>
+                            <option value="whisper-1">OpenAI Whisper-1</option>
+                            {% else %}
+                            <option value="gpt-4o-mini-transcribe" selected>OpenAI GPT-4o Mini</option>
+                            <option value="gpt-4o-transcribe">OpenAI GPT-4o</option>
+                            <option value="whisper-1">OpenAI Whisper-1</option>
+                            <option value="local_whisper">Local Faster Whisper</option>
+                            {% endif %}
+                        </select>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <template id="model-options-free_ai" data-initial="openai">
+            <option value="openai">GPT-4o-mini (Free Ultra-Fast)</option>
+            <option value="openai-fast">GPT-4.1-nano (Free Instant)</option>
+            <option value="llama">Llama 3.3 70B (Free)</option>
+            <option value="mistral">Mistral Small 3 (Free)</option>
+        </template>
+        <template id="model-options-openai" data-initial="{{ openai_model or '' }}">
+            <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+            <option value="gpt-5.4-mini">GPT-5.4 mini</option>
+            <option value="gpt-5.4-nano">GPT-5.4 nano</option>
+            <option value="gpt-5.2">GPT-5.2</option>
+            <option value="gpt-5-mini">GPT-5 mini</option>
+            <option value="gpt-4o">GPT-4o</option>
+            <option value="gpt-4o-mini">GPT-4o-mini</option>
+        </template>
+        <template id="model-options-ollama" data-initial="{{ ollama_model or '' }}"></template>
+        <template id="model-options-xai" data-initial="{{ xai_model or '' }}">
+            <option value="grok-4.3">Grok 4.3 (fast, no reasoning)</option>
+            <option value="grok-4.5">Grok 4.5 (low reasoning)</option>
+        </template>
+        <template id="model-options-anthropic" data-initial="{{ anthropic_model or '' }}">
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+        </template>
+
+        <template id="voice-options-edge_tts" data-initial="uz-UZ-MadinaNeural">
+            <option value="uz-UZ-MadinaNeural">Madina — O'zbek (Ayol, Tabiiy Neural)</option>
+            <option value="uz-UZ-SardorNeural">Sardor — O'zbek (Erkak, Tabiiy Neural)</option>
+            <option value="ru-RU-SvetlanaNeural">Svetlana — Русский (Женский)</option>
+            <option value="ru-RU-DmitryNeural">Dmitry — Русский (Мужской)</option>
+            <option value="en-US-AvaMultilingualNeural">Ava — English / Multilingual (Female)</option>
+            <option value="en-US-AndrewMultilingualNeural">Andrew — English / Multilingual (Male)</option>
+            <option value="tr-TR-EmelNeural">Emel — Türkçe (Kadın)</option>
+        </template>
+        <template id="voice-options-openai" data-initial="{{ openai_tts_voice or '' }}">
+            <option value="alloy">Alloy - female</option>
+            <option value="echo">Echo - male</option>
+            <option value="fable">Fable - male</option>
+            <option value="onyx">Onyx - male</option>
+            <option value="nova">Nova - female</option>
+            <option value="shimmer">Shimmer - female</option>
+            <option value="sage">Sage - female</option>
+            <option value="coral">Coral - female</option>
+            <option value="ash">Ash - male</option>
+        </template>
+        <template id="voice-options-elevenlabs" data-initial="{{ elevenlabs_voice or '' }}"></template>
+        <template id="voice-options-kokoro" data-initial="{{ kokoro_voice or '' }}"></template>
+        <template id="voice-options-xai" data-initial="{{ xai_tts_voice or '' }}">
+            <option value="carina">Carina - soft, empathetic, soothing</option>
+            <option value="zagan">Zagan - powerful, dramatic, unmistakable</option>
+            <option value="helix">Helix - bold, dynamic, adrenaline-fueled</option>
+            <option value="orion">Orion - rich, cinematic, resonant</option>
+            <option value="luna">Luna - gentle, patient, nurturing</option>
+            <option value="iris">Iris - friendly, upbeat, charming</option>
+            <option value="altair">Altair - elegant, refined, premium</option>
+            <option value="zenith">Zenith - sharp, focused, driven</option>
+            <option value="perseus">Perseus - strong, confident, trustworthy</option>
+            <option value="helios">Helios - upbeat, energetic, versatile</option>
+            <option value="lux">Lux - grounded, calm, wise</option>
+            <option value="kepler">Kepler - inventive, forward-thinking, charismatic</option>
+            <option value="rigel">Rigel - precise, professional, confident</option>
+            <option value="cosmo">Cosmo - bright, curious, easy to follow</option>
+            <option value="celeste">Celeste - compassionate, confident, reassuring</option>
+            <option value="ursa">Ursa - friendly, warm, steadfast</option>
+            <option value="sirius">Sirius - quick-witted, clever, playful</option>
+            <option value="lumen">Lumen - warm, articulate, engaging</option>
+            <option value="castor">Castor - charismatic, down-to-earth, easygoing</option>
+            <option value="naksh">Naksh - warm, thoughtful, wise</option>
+            <option value="atlas">Atlas - confident, commanding, reassuring</option>
+            <option value="eve">Eve - energetic, upbeat</option>
+            <option value="ara">Ara - warm, friendly</option>
+            <option value="rex">Rex - confident, clear</option>
+            <option value="sal">Sal - smooth, balanced</option>
+            <option value="leo">Leo - authoritative, strong</option>
+        </template>
+        <template id="voice-options-typecast" data-initial="{{ typecast_voice or '' }}"></template>
+        <template id="voice-options-speechify" data-initial="{{ speechify_voice or '' }}"></template>
+    </main>
+    {% if ui_server_logs %}
+    <section class="server-logs-wrapper" aria-label="Server logs">
+        <div id="serverLogsPanel" class="server-logs-panel">
+            <div class="server-logs-header">
+                <button id="serverLogsToggle" class="server-logs-toggle" type="button" aria-expanded="false">
+                    <span class="server-logs-caret" aria-hidden="true">▸</span>
+                    <span class="server-logs-title">Server Logs</span>
+                    <span
+                        id="serverLogsStatus"
+                        class="server-logs-status server-logs-status-connecting"
+                        title="Connecting to log stream..."
+                        aria-label="Log stream connecting"
+                    ></span>
+                </button>
+                <button
+                    id="serverLogsFollow"
+                    class="server-logs-follow is-active"
+                    type="button"
+                    title="Following latest logs"
+                    aria-label="Follow latest logs"
+                    aria-pressed="true"
+                >
+                    <span class="server-logs-follow-icon" aria-hidden="true">↓</span>
+                </button>
+            </div>
+            <div id="serverLogsBody" class="server-logs-body" hidden>
+                <div id="serverLogsContent" class="server-logs-content" tabindex="0">
+                    <div class="server-log-line server-log-placeholder">
+                        <span class="server-log-ts">--:--:--</span>
+                        <span class="server-log-tag server-log-tag-sys">SYS</span>
+                        <span class="server-log-message">Click header to expand • Logs stream in real-time</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+    <footer>
+        <p><a href="https://github.com/bigsk1/voice-chat-ai" target="_blank">GitHub Repository</a></p>
+    </footer>
+    <script src="/app/static/js/scripts.js"></script>
+    {% if ui_server_logs %}
+    <script src="/app/static/js/server_logs.js"></script>
+    {% endif %}
+</body>
+</html>

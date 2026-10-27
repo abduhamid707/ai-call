@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ElevenLabs AI Call Mode — 0.2s WebRTC Super-Realtime</title>
+    <link rel="icon" href="/app/static/favicon.ico" type="image/x-icon">
+    <style>
+        :root {
+            --bg-primary: #07090e;
+            --bg-panel: rgba(15, 19, 30, 0.78);
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --accent-cyan: #06b6d4;
+            --accent-indigo: #6366f1;
+            --accent-emerald: #10b981;
+            --accent-rose: #f43f5e;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: radial-gradient(circle at 50% 20%, #111827 0%, #07090e 70%);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 28px;
+            border-bottom: 1px solid var(--border-subtle);
+            background: rgba(7, 9, 14, 0.85);
+            backdrop-filter: blur(14px);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 700;
+            font-size: 1.2rem;
+            letter-spacing: -0.02em;
+        }
+
+        .brand-badge {
+            background: linear-gradient(135deg, #10b981, var(--accent-cyan));
+            color: white;
+            font-size: 0.7rem;
+            padding: 3px 10px;
+            border-radius: 999px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 8px;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 8px 14px;
+            border-radius: 10px;
+            transition: all 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-links a.active {
+            color: #fff;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(6, 182, 212, 0.25));
+            border: 1px solid rgba(99, 102, 241, 0.4);
+        }
+
+        .workspace {
+            flex: 1;
+            max-width: 1360px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 24px;
+            display: grid;
+            grid-template-columns: 340px 1fr 370px;
+            gap: 24px;
+            align-items: stretch;
+        }
+
+        @media (max-width: 1100px) {
+            header {
+                padding: 10px 14px;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .nav-links {
+                display: none;
+            }
+            .workspace {
+                grid-template-columns: 1fr;
+                padding: 12px;
+                gap: 14px;
+            }
+            .orb-stage {
+                order: -1;
+                min-height: 440px;
+                padding: 18px 14px;
+            }
+            .orb-wrapper, #orbCanvas {
+                width: 240px;
+                height: 240px;
+            }
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-subtle);
+            border-radius: 24px;
+            padding: 22px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .panel-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .field-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .field-group label {
+            font-size: 0.82rem;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+
+        .field-group select,
+        .field-group input {
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            padding: 10px 12px;
+            border-radius: 12px;
+            font-size: 0.88rem;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        .field-group select:focus,
+        .field-group input:focus {
+            border-color: var(--accent-cyan);
+        }
+
+        .orb-stage {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 28px 24px;
+            min-height: 560px;
+            overflow: hidden;
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 16px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #64748b;
+        }
+
+        .status-dot.listening {
+            background: var(--accent-emerald);
+            box-shadow: 0 0 12px var(--accent-emerald);
+        }
+
+        .status-dot.speaking {
+            background: var(--accent-cyan);
+            box-shadow: 0 0 12px var(--accent-cyan);
+        }
+
+        .status-dot.thinking {
+            background: #a855f7;
+            box-shadow: 0 0 12px #a855f7;
+        }
+
+        .orb-wrapper {
+            position: relative;
+            width: 310px;
+            height: 310px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #orbCanvas {
+            width: 310px;
+            height: 310px;
+            display: block;
+        }
+
+        .orb-center-label {
+            position: absolute;
+            pointer-events: none;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .orb-center-label .state-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        .orb-center-label .state-sub {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.75);
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+        }
+
+        .live-subtitle {
+            min-height: 48px;
+            max-width: 90%;
+            text-align: center;
+            font-size: 1.02rem;
+            color: #e2e8f0;
+            line-height: 1.45;
+            padding: 10px 18px;
+            border-radius: 14px;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .call-actions {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .btn-call {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 28px;
+            border-radius: 999px;
+            font-size: 0.98rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: white;
+        }
+
+        .btn-call.start {
+            background: linear-gradient(135deg, #10b981, #059669);
+            box-shadow: 0 8px 25px rgba(16, 185, 129, 0.35);
+        }
+
+        .btn-call.start:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 30px rgba(16, 185, 129, 0.5);
+        }
+
+        .btn-call.end {
+            background: linear-gradient(135deg, #f43f5e, #e11d48);
+            box-shadow: 0 8px 25px rgba(244, 63, 94, 0.35);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #e2e8f0;
+            padding: 12px 18px;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.14);
+        }
+
+        .chat-log {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding-right: 4px;
+            max-height: 460px;
+        }
+
+        .msg {
+            padding: 12px 15px;
+            border-radius: 16px;
+            font-size: 0.9rem;
+            line-height: 1.45;
+            max-width: 92%;
+            word-wrap: break-word;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #4f46e5, #6366f1);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.ai {
+            align-self: flex-start;
+            background: rgba(30, 41, 59, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #f1f5f9;
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg.system {
+            align-self: center;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 6px 12px;
+            border-radius: 999px;
+        }
+
+        .text-input-row {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+        }
+
+        .text-input-row input {
+            flex: 1;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: white;
+            padding: 11px 14px;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            outline: none;
+        }
+
+        .text-input-row button {
+            background: var(--accent-indigo);
+            color: white;
+            border: none;
+            padding: 0 18px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .metrics-bar {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.76rem;
+            color: var(--text-muted);
+            padding-top: 8px;
+            border-top: 1px solid var(--border-subtle);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span>🎙️ ElevenLabs AI Call Studio</span>
+            <span class="brand-badge">⚡ 0.2s WEBRTC REALTIME + INSTANT BARGE-IN</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/call" class="active">🔥 ElevenLabs Call Mode</a></li>
+            <li><a href="/">Dashboard (Classic)</a></li>
+            <li><a href="/enhanced">Enhanced</a></li>
+            <li><a href="/webrtc_realtime">WebRTC Realtime</a></li>
+        </ul>
+    </header>
+
+    <div class="workspace">
+        <!-- Left: Voice & Agent Configuration -->
+        <aside class="panel">
+            <div class="panel-title">
+                <span>⚡ Qo'ng'iroq Dvigateli va Ovoz</span>
+            </div>
+
+            <div class="field-group">
+                <label for="engineSelect">🚀 Aloqa Texnologiyasi (Call Engine):</label>
+                <select id="engineSelect">
+                    <option value="edge_turbo" selected>🇺🇿 Sardor/Madina Neural TTS (0.2s Super-Turbo, $1=4000 daqiqa ⚡)</option>
+                    <option value="webrtc">⚡ WebRTC Super-Realtime (OpenAI Audio-to-Audio)</option>
+                </select>
+            </div>
+
+            <div class="field-group">
+                <label for="langSelect">🌍 Suhbat Tili:</label>
+                <select id="langSelect">
+                    <option value="uz-UZ" selected>🇺🇿 O'zbek tili (uz-UZ)</option>
+                    <option value="ru-RU">🇷🇺 Русский язык (ru-RU)</option>
+                    <option value="en-US">🇺🇸 English (en-US)</option>
+                    <option value="tr-TR">🇹🇷 Türkçe (tr-TR)</option>
+                </select>
+            </div>
+
+            <div class="field-group" id="rtcVoiceGroup" style="display: none;">
+                <label for="rtcVoiceSelect">🗣️ WebRTC Realtime Ovozi (0.2s):</label>
+                <select id="rtcVoiceSelect">
+                    <option value="ash" selected>Ash — Erkak (Aniq va Tabiiy)</option>
+                    <option value="marin">Marin — Ayol (Tavsiya etiladi)</option>
+                    <option value="cedar">Cedar — Erkak (Tavsiya etiladi)</option>
+                    <option value="coral">Coral — Ayol (Samimiy)</option>
+                    <option value="sage">Sage — Ayol (Sokin)</option>
+                    <option value="verse">Verse — Erkak (Jonli)</option>
+                    <option value="alloy">Alloy — Universal</option>
+                </select>
+            </div>
+
+            <div class="field-group" id="edgeVoiceGroup">
+                <label for="voiceSelect">🗣️ Neural Edge-TTS Ovozi (100% Bepul):</label>
+                <select id="voiceSelect">
+                    {% for v in voices %}
+                    <option value="{{ v.id }}">{{ v.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field-group">
+                <label for="charSelect">🎭 AI Agent / Obraz:</label>
+                <select id="charSelect">
+                    {% for c in characters %}
+                    <option value="{{ c }}" {% if c == default_character %}selected{% endif %}>{{ c.replace('_', ' ').title() }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field-group">
+                <label for="rtcModelSelect">🤖 Realtime Model:</label>
+                <select id="rtcModelSelect">
+                    <option value="gpt-realtime-2.1-mini" selected>gpt-realtime-2.1-mini (Yashin Tezligida ⚡)</option>
+                    <option value="gpt-realtime-2.1">gpt-realtime-2.1 (Maksimal Aqlli)</option>
+                </select>
+            </div>
+
+            <div class="field-group">
+                <label for="silenceMsSelect">⏱️ Gapni bo'lish va sezish (VAD):</label>
+                <select id="silenceMsSelect">
+                    <option value="250" selected>250 ms (Bir zumda sezadi ⚡)</option>
+                    <option value="380">380 ms (Tabiiy)</option>
+                    <option value="600">600 ms (Sekinroq)</option>
+                </select>
+            </div>
+
+            <div class="metrics-bar">
+                <span id="modeBadge">Sahiy 0.2s Neural Turbo</span>
+                <span id="latencyBadge">Javob tezligi: ~150 ms ⚡</span>
+            </div>
+
+            <!-- Mobile Wi-Fi + HTTPS QR Card -->
+            <div style="margin-top: 8px; padding: 12px; border-radius: 16px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.28); text-align: center;">
+                <div style="font-size: 0.8rem; font-weight: 700; color: #34d399; margin-bottom: 6px;">
+                    📱 Telefonda Ochish (Mikrofon 100% ishlaydi)
+                </div>
+                <img id="qrCodeImg" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=https://contributing-falling-moderate-iron.trycloudflare.com/call" alt="QR Code" style="width: 130px; height: 130px; border-radius: 10px; background: white; padding: 6px; margin: 4px auto; display: block;" />
+                <div style="font-size: 0.72rem; color: #cbd5e1; margin-top: 6px; word-break: break-all;">
+                    <b>HTTPS (Tavsiya — Mic 100%):</b><br/>
+                    <a id="httpsMobileLink" href="https://contributing-falling-moderate-iron.trycloudflare.com/call" target="_blank" style="color: #38bdf8; text-decoration: underline;">https://contributing-falling-moderate-iron.trycloudflare.com/call</a>
+                </div>
+                <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 4px;">
+                    Wi-Fi IP: <span id="wifiIpLabel">http://192.168.68.106:8000/call</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center: ElevenLabs 3D Interactive Audio Orb -->
+        <section class="panel orb-stage">
+            <div class="status-pill">
+                <span id="statusDot" class="status-dot"></span>
+                <span id="statusText">Sahiy aloqa markazi tayyor</span>
+            </div>
+
+            <div class="orb-wrapper" id="orbWrapper" title="Bosing: Gapni bo'lish yoki Qo'ng'iroqni boshlash">
+                <canvas id="orbCanvas" width="620" height="620"></canvas>
+                <div class="orb-center-label">
+                    <span class="state-title" id="orbTitle">SAHIY AI</span>
+                    <span class="state-sub" id="orbSub">Boshlash uchun bosing</span>
+                </div>
+            </div>
+
+            <div class="live-subtitle" id="liveSubtitle">
+                🇺🇿 Sahiy Aloqa Markazi: "Qo'ng'iroqni boshlash" tugmasini bosing va ovozda savol bering!
+            </div>
+
+            <div class="call-actions">
+                <button id="callToggleBtn" class="btn-call start">
+                    <span>📞 Qo'ng'iroqni boshlash</span>
+                </button>
+                <button id="interruptBtn" class="btn-secondary" style="display: none;">
+                    ✋ Gapni bo'lish
+                </button>
+            </div>
+        </section>
+
+        <!-- Right: Sahiy Official FAQ & Live Transcript -->
+        <aside class="panel">
+            <div class="panel-title">
+                <span>📋 Sahiy Rasmiy FAQ Bazasi</span>
+                <button id="clearChatBtn" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.78rem;">Tozalash</button>
+            </div>
+
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+                <button type="button" class="faq-chip" data-q="Sahiy qanday kompaniya va nima sotadi?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">🏢 Sahiy haqida</button>
+                <button type="button" class="faq-chip" data-q="Yetkazib berish muddati va narxi qancha?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">🚚 Yetkazib berish</button>
+                <button type="button" class="faq-chip" data-q="Bo'lib to'lash va muddatli to'lov bormi?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">💳 Bo'lib to'lash</button>
+                <button type="button" class="faq-chip" data-q="To'lov turlari qanday?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">💰 To'lov turlari</button>
+                <button type="button" class="faq-chip" data-q="Ish vaqti soat nechadan nechagacha?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">⏰ Ish vaqti</button>
+                <button type="button" class="faq-chip" data-q="Manzilingiz qayerda joylashgan?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">📍 Manzil</button>
+                <button type="button" class="faq-chip" data-q="Kafolat va qaytarish shartlari qanday?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">🛡️ Kafolat</button>
+                <button type="button" class="faq-chip" data-q="Chegirmalar va keshbek bormi?" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.35);color:#e2e8f0;padding:5px 10px;border-radius:999px;font-size:0.73rem;cursor:pointer;">🎁 Chegirmalar</button>
+            </div>
+
+            <div class="chat-log" id="chatLog">
+                <div class="msg system">🇺🇿 Sahiy Rasmiy Aloqa Markazi (Faqat FAQ asosida javob beradi)</div>
+            </div>
+
+            <form class="text-input-row" id="textForm">
+                <input type="text" id="textInput" placeholder="Yoki shu yerga yozib yuboring..." autocomplete="off" />
+                <button type="submit">Yuborish</button>
+            </form>
+        </aside>
+    </div>
+
+    <script>
+        const callToggleBtn = document.getElementById('callToggleBtn');
+        const interruptBtn = document.getElementById('interruptBtn');
+        const orbWrapper = document.getElementById('orbWrapper');
+        const orbCanvas = document.getElementById('orbCanvas');
+        const ctx = orbCanvas.getContext('2d');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const orbTitle = document.getElementById('orbTitle');
+        const orbSub = document.getElementById('orbSub');
+        const liveSubtitle = document.getElementById('liveSubtitle');
+        const chatLog = document.getElementById('chatLog');
+        const textForm = document.getElementById('textForm');
+        const textInput = document.getElementById('textInput');
+        const clearChatBtn = document.getElementById('clearChatBtn');
+        const latencyBadge = document.getElementById('latencyBadge');
+        const modeBadge = document.getElementById('modeBadge');
+
+        const engineSelect = document.getElementById('engineSelect');
+        const langSelect = document.getElementById('langSelect');
+        const rtcVoiceGroup = document.getElementById('rtcVoiceGroup');
+        const edgeVoiceGroup = document.getElementById('edgeVoiceGroup');
+        const rtcVoiceSelect = document.getElementById('rtcVoiceSelect');
+        const voiceSelect = document.getElementById('voiceSelect');
+        const charSelect = document.getElementById('charSelect');
+        const rtcModelSelect = document.getElementById('rtcModelSelect');
+        const silenceMsSelect = document.getElementById('silenceMsSelect');
+
+        let isCallActive = false;
+        let currentState = 'idle'; // idle | listening | thinking | speaking
+        let conversationHistory = [];
+
+        // WebRTC state
+        let peerConnection = null;
+        let dataChannel = null;
+        let micStream = null;
+        let rtcAudioPlayer = document.createElement('audio');
+        rtcAudioPlayer.autoplay = true;
+        rtcAudioPlayer.playsInline = true;
+        rtcAudioPlayer.setAttribute('playsinline', '');
+        rtcAudioPlayer.style.display = 'none';
+        document.body.appendChild(rtcAudioPlayer);
+        let speechStopTimestamp = 0;
+
+        // Edge Turbo fallback state
+        let currentAudio = null;
+        let recognition = null;
+        let silenceTimer = null;
+        let accumulatedTranscript = '';
+        let latestInterim = '';
+        let turnAbortController = null;
+        let aiSpeechStartedAt = 0;
+
+        // Web Audio API Analyser for 60FPS 3D Orb
+        let audioCtx = null;
+        let micAnalyser = null;
+        let ttsAnalyser = null;
+        let micDataArray = new Uint8Array(64);
+        let ttsDataArray = new Uint8Array(64);
+
+        engineSelect.addEventListener('change', () => {
+            const isWebRTC = engineSelect.value === 'webrtc';
+            rtcVoiceGroup.style.display = isWebRTC ? 'flex' : 'none';
+            edgeVoiceGroup.style.display = isWebRTC ? 'none' : 'flex';
+            modeBadge.textContent = isWebRTC ? 'WebRTC UDP Stream' : 'Edge Neural Turbo';
+            latencyBadge.textContent = isWebRTC ? 'Kechikish: ~200 ms' : 'Kechikish: ~1.2 s';
+            if (isCallActive) {
+                stopCall();
+            }
+        });
+
+        function setUIState(state, subtitleText = null) {
+            currentState = state;
+            statusDot.className = 'status-dot ' + state;
+            if (state === 'idle') {
+                statusText.textContent = "Qo'ng'iroqqa tayyor";
+                orbTitle.textContent = "AI CALL";
+                orbSub.textContent = "Boshlash uchun bosing";
+                interruptBtn.style.display = 'none';
+            } else if (state === 'listening') {
+                statusText.textContent = "Sizni eshitmoqda... Gapiring!";
+                orbTitle.textContent = "ESHITMOQDA";
+                orbSub.textContent = "0ms Avto Gapni Bo'lish";
+                interruptBtn.style.display = 'none';
+            } else if (state === 'thinking') {
+                statusText.textContent = "Javob berilmoqda...";
+                orbTitle.textContent = "STREAMING...";
+                orbSub.textContent = "WebRTC Realtime";
+                interruptBtn.style.display = 'none';
+            } else if (state === 'speaking') {
+                statusText.textContent = "AI gapirmoqda (Gapirsangiz darhol to'xtaydi!)";
+                orbTitle.textContent = "AI GAPIRMOQDA";
+                orbSub.textContent = "Gapirib bo'lishingiz mumkin";
+                interruptBtn.style.display = 'inline-flex';
+            }
+            if (subtitleText !== null) {
+                liveSubtitle.textContent = subtitleText;
+            }
+        }
+
+        function appendMessage(role, text) {
+            if (!text || !text.trim()) return;
+            const div = document.createElement('div');
+            div.className = 'msg ' + role;
+            div.textContent = text.trim();
+            chatLog.appendChild(div);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        clearChatBtn.addEventListener('click', () => {
+            conversationHistory = [];
+            chatLog.innerHTML = '<div class="msg system">Muloqot tarixi tozalandi.</div>';
+        });
+
+        // =====================================================================
+        // MODE 1: WEBRTC SUPER-REALTIME (~200ms latency, Native 0ms Barge-In)
+        // =====================================================================
+        async function buildWebRTCInstructions() {
+            const charName = charSelect.value;
+            let basePrompt = "";
+            try {
+                const res = await fetch(`/api/character/${charName}`);
+                if (res.ok) {
+                    const d = await res.json();
+                    basePrompt = d.prompt || "";
+                }
+            } catch (e) {}
+
+            const langRules = {
+                'uz-UZ': "MUHIM QOIDA: Foydalanuvchi bilan faqat SOF, RAVON O'ZBEK TILIDA gaplashing! Javoblaringizni juda qisqa (1 ta gap, 5-12 so'z), tez, samimiy va jonli odamdek ayting. Hech qachon uzun ma'ruza o'qimang!",
+                'ru-RU': "ВАЖНО: Разговаривай на чистом русском языке, очень кратко (1 предложение, 5-12 слов), живо и естественно, как по телефону!",
+                'en-US': "IMPORTANT: Speak in natural English, very concisely (1 short sentence, 5-12 words) like a live phone call!",
+                'tr-TR': "ÖNEMLİ: Doğal Türkçe konuşun, çok kısa (1 cümle, 5-12 kelime) ve samimi cevap verin!"
+            }[langSelect.value] || "";
+
+            return `${basePrompt}\n\n${langRules}`.trim();
+        }
+
+        async function startWebRTCCall() {
+            setUIState('thinking', "⚡ WebRTC Super-Realtime ulanmoqda...");
+            callToggleBtn.disabled = true;
+
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                // Connect Mic to 3D Orb Analyser
+                const micSource = audioCtx.createMediaStreamSource(micStream);
+                micAnalyser = audioCtx.createAnalyser();
+                micAnalyser.fftSize = 128;
+                micSource.connect(micAnalyser);
+                micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Connect incoming WebRTC AI Audio stream to speakers AND 3D Orb Analyser!
+                peerConnection.ontrack = (e) => {
+                    const remoteStream = e.streams[0];
+                    rtcAudioPlayer.srcObject = remoteStream;
+                    try {
+                        const remoteSource = audioCtx.createMediaStreamSource(remoteStream);
+                        ttsAnalyser = audioCtx.createAnalyser();
+                        ttsAnalyser.fftSize = 128;
+                        remoteSource.connect(ttsAnalyser);
+                        ttsDataArray = new Uint8Array(ttsAnalyser.frequencyBinCount);
+                    } catch (err) {
+                        console.warn("Remote stream analyser warning:", err);
+                    }
+                };
+
+                peerConnection.addTrack(micStream.getAudioTracks()[0], micStream);
+
+                dataChannel = peerConnection.createDataChannel("oai-events");
+
+                let streamingAiTranscript = "";
+
+                dataChannel.onopen = async () => {
+                    const instructions = await buildWebRTCInstructions();
+                    const silenceMs = parseInt(silenceMsSelect.value || "250", 10);
+
+                    // Configure ultra-fast VAD + Uzbek instructions + instant barge-in
+                    dataChannel.send(JSON.stringify({
+                        type: "session.update",
+                        session: {
+                            type: "realtime",
+                            instructions: instructions,
+                            audio: {
+                                input: {
+                                    transcription: { model: "gpt-4o-mini-transcribe" },
+                                    turn_detection: {
+                                        type: "server_vad",
+                                        threshold: 0.5,
+                                        prefix_padding_ms: 180,
+                                        silence_duration_ms: silenceMs,
+                                        create_response: true,
+                                        interrupt_response: true
+                                    }
+                                },
+                                output: {
+                                    voice: rtcVoiceSelect.value
+                                }
+                            }
+                        }
+                    }));
+
+                    // Trigger immediate short greeting in selected language
+                    const greetPrompt = {
+                        'uz-UZ': "Foydalanuvchiga 4-5 so'z bilan qisqa o'zbekcha salom berib, eshitayotganingizni ayting.",
+                        'ru-RU': "Кратко (4-5 слов) поздоровайся по-русски и скажи, что слушаешь.",
+                        'en-US': "Greet the user in 4-5 words and say you are listening.",
+                        'tr-TR': "Kullanıcıyı 4-5 kelimeyle Türkçe selamla ve dinlediğini söyle."
+                    }[langSelect.value];
+
+                    dataChannel.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            instructions: greetPrompt
+                        }
+                    }));
+                };
+
+                dataChannel.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        const t = msg.type;
+
+                        if (t === "input_audio_buffer.speech_started") {
+                            // USER STARTED SPEAKING -> INSTANT 0ms BARGE-IN!
+                            setUIState('listening', "🎙️ Siz gapiryapsiz (AI darhol to'xtadi)...");
+                            streamingAiTranscript = "";
+                        } else if (t === "input_audio_buffer.speech_stopped") {
+                            speechStopTimestamp = performance.now();
+                            setUIState('thinking', "⚡ Javob berilmoqda...");
+                        } else if (t === "conversation.item.input_audio_transcription.completed") {
+                            if (msg.transcript && msg.transcript.trim()) {
+                                appendMessage('user', msg.transcript.trim());
+                            }
+                        } else if (t === "response.output_audio.delta" || t === "response.audio.delta") {
+                            if (speechStopTimestamp > 0) {
+                                const rtt = Math.round(performance.now() - speechStopTimestamp);
+                                latencyBadge.textContent = `Javob tezligi: ${rtt} ms ⚡`;
+                                speechStopTimestamp = 0;
+                            }
+                            if (currentState !== 'speaking') {
+                                setUIState('speaking');
+                            }
+                        } else if (t === "response.output_audio_transcript.delta" || t === "response.audio_transcript.delta") {
+                            if (msg.delta) {
+                                streamingAiTranscript += msg.delta;
+                                liveSubtitle.textContent = streamingAiTranscript;
+                            }
+                            if (currentState !== 'speaking') {
+                                setUIState('speaking');
+                            }
+                        } else if (t === "response.output_audio_transcript.done" || t === "response.audio_transcript.done") {
+                            const finalAiText = (msg.transcript || streamingAiTranscript || "").trim();
+                            if (finalAiText) {
+                                appendMessage('ai', finalAiText);
+                                liveSubtitle.textContent = finalAiText;
+                            }
+                            streamingAiTranscript = "";
+                        } else if (t === "response.output_audio.done" || t === "response.done") {
+                            if (isCallActive && currentState === 'speaking') {
+                                setTimeout(() => {
+                                    if (isCallActive && currentState === 'speaking') {
+                                        setUIState('listening', "Eshitaman, bemalol gapiravering...");
+                                    }
+                                }, 250);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("DC parse warning:", e);
+                    }
+                };
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                const proxyParams = new URLSearchParams({
+                    model: rtcModelSelect.value,
+                    voice: rtcVoiceSelect.value
+                });
+
+                const sdpRes = await fetch(`/openai_realtime_proxy?${proxyParams.toString()}`, {
+                    method: "POST",
+                    body: peerConnection.localDescription.sdp,
+                    headers: { "Content-Type": "application/sdp" }
+                });
+
+                if (!sdpRes.ok) {
+                    const errTxt = await sdpRes.text();
+                    throw new Error(`WebRTC Error (${sdpRes.status}): ${errTxt}`);
+                }
+
+                const answerSdp = await sdpRes.text();
+                await peerConnection.setRemoteDescription({ type: "answer", sdp: answerSdp });
+
+                isCallActive = true;
+                callToggleBtn.disabled = false;
+                callToggleBtn.className = 'btn-call end';
+                callToggleBtn.innerHTML = '<span>📴 Qo\'ng\'iroqni yakunlash</span>';
+                setUIState('listening', "⚡ WebRTC Super-Realtime ulandi! Gapiravering!");
+            } catch (err) {
+                console.error("WebRTC connection failed, falling back to Edge Turbo:", err);
+                callToggleBtn.disabled = false;
+                appendMessage('system', "WebRTC xatosi: " + err.message);
+                stopCall();
+            }
+        }
+
+        // =====================================================================
+        // MODE 2: EDGE NEURAL TTS 0.2s SUPER-TURBO (Sardor / Madina)
+        // Combines:
+        //  1) 100ms Speculative Interim Pre-Execution (starts LLM+TTS while user finishes speaking)
+        //  2) Persistent IPv4 Edge-TTS WebSocket + gpt-5.4-nano (reasoning_effort=none)
+        //  3) 0.17s Pre-Cached Reflex Voice Bridge ('Albatta,' / 'Tushunarli,')
+        //  4) Non-stop Continuous Recognition (0ms Barge-In without restarting mic!)
+        // =====================================================================
+        let reflexPack = { q_audio_b64: null, q_text: "Albatta,", s_audio_b64: null, s_text: "Tushunarli," };
+        let speculativeCache = { text: "", promise: null, abortController: null, startedAt: 0 };
+        let prefetchTimer = null;
+        let consumedResultIndex = 0;
+        let consumedFinalLength = 0;
+
+        async function loadReflexPack() {
+            try {
+                const params = new URLSearchParams({
+                    voice: voiceSelect.value || "uz-UZ-SardorNeural",
+                    speed: "1.15",
+                    language: langSelect.value || "uz-UZ"
+                });
+                const res = await fetch(`/api/call/reflex_pack?${params.toString()}`);
+                if (res.ok) {
+                    reflexPack = await res.json();
+                }
+            } catch (e) {
+                console.warn("Reflex pack preload warning:", e);
+            }
+        }
+        loadReflexPack();
+        voiceSelect.addEventListener('change', loadReflexPack);
+        langSelect.addEventListener('change', loadReflexPack);
+
+        function isQuestionText(txt) {
+            const lower = (txt || "").toLowerCase();
+            return (
+                lower.includes("?") ||
+                /\b(bormi|qancha|qanday|qayerda|qachon|nechchi|necha|kim|nima|mumkinmi|bo'ladimi|kelsam|olasizmi|berasizmi)\b/.test(lower)
+            );
+        }
+
+        function stopCurrentAudio() {
+            if (currentAudio) {
+                try {
+                    currentAudio.onended = null;
+                    currentAudio.pause();
+                    currentAudio.src = "";
+                } catch (e) {}
+                currentAudio = null;
+            }
+        }
+
+        function playAudioBase64Promise(b64Data, textLabel, keepSpeakingStateAfter = false) {
+            return new Promise(async (resolve) => {
+                stopCurrentAudio();
+                aiSpeechStartedAt = performance.now();
+                setUIState('speaking', textLabel);
+
+                const audioUrl = "data:audio/mpeg;base64," + b64Data;
+                const audio = new Audio(audioUrl);
+                currentAudio = audio;
+
+                if (audioCtx) {
+                    try {
+                        if (audioCtx.state === 'suspended') await audioCtx.resume();
+                        const srcNode = audioCtx.createMediaElementSource(audio);
+                        ttsAnalyser = audioCtx.createAnalyser();
+                        ttsAnalyser.fftSize = 128;
+                        srcNode.connect(ttsAnalyser);
+                        ttsAnalyser.connect(audioCtx.destination);
+                        ttsDataArray = new Uint8Array(ttsAnalyser.frequencyBinCount);
+                    } catch (e) {}
+                }
+
+                audio.onended = () => {
+                    if (currentAudio === audio) {
+                        currentAudio = null;
+                        if (!keepSpeakingStateAfter && isCallActive && currentState === 'speaking') {
+                            setUIState('listening', "Eshitaman, gapiravering...");
+                        }
+                    }
+                    resolve();
+                };
+
+                audio.onerror = () => {
+                    if (currentAudio === audio) currentAudio = null;
+                    resolve();
+                };
+
+                try {
+                    await audio.play();
+                } catch (err) {
+                    if (isCallActive && !keepSpeakingStateAfter) setUIState('listening');
+                    resolve();
+                }
+            });
+        }
+
+        async function playAudioBase64(b64Data, textLabel) {
+            await playAudioBase64Promise(b64Data, textLabel, false);
+        }
+
+        function startSpeculativeFetch(candidateText, usedBridgeHint = true) {
+            const norm = (candidateText || "").trim();
+            if (norm.length < 2) return null;
+            if (speculativeCache.text === norm && speculativeCache.promise) {
+                return speculativeCache.promise;
+            }
+            if (speculativeCache.abortController) {
+                try { speculativeCache.abortController.abort(); } catch (e) {}
+            }
+            const ac = new AbortController();
+            const p = fetch('/api/call/voice_turn', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: ac.signal,
+                body: JSON.stringify({
+                    message: norm,
+                    character: charSelect.value,
+                    history: conversationHistory,
+                    language: langSelect.value,
+                    provider: 'free_ai',
+                    model: 'gpt-5.4-nano',
+                    voice: voiceSelect.value,
+                    speed: 1.15,
+                    used_bridge: usedBridgeHint
+                })
+            }).then(r => {
+                if (!r.ok) throw new Error('Turn failed');
+                return r.json();
+            });
+
+            speculativeCache = {
+                text: norm,
+                promise: p,
+                abortController: ac,
+                startedAt: performance.now()
+            };
+            return p;
+        }
+
+        async function handleEdgeTurboTurn(userText) {
+            const cleaned = (userText || '').trim();
+            if (!cleaned) return;
+
+            if (silenceTimer) {
+                clearTimeout(silenceTimer);
+                silenceTimer = null;
+            }
+            if (prefetchTimer) {
+                clearTimeout(prefetchTimer);
+                prefetchTimer = null;
+            }
+            accumulatedTranscript = '';
+            latestInterim = '';
+
+            stopCurrentAudio();
+            appendMessage('user', cleaned);
+            const turnCommitTime = performance.now();
+            setUIState('thinking', `Siz: "${cleaned}"`);
+
+            const fetchPromise = startSpeculativeFetch(cleaned, false);
+            const activeAbort = speculativeCache.abortController;
+            turnAbortController = activeAbort;
+
+            try {
+                const data = await fetchPromise;
+                speculativeCache = { text: "", promise: null, abortController: null, startedAt: 0 };
+
+                const reply = data.reply || "Eshitaman, davom eting.";
+                const firstAudioMs = Math.round(performance.now() - turnCommitTime);
+                latencyBadge.textContent = `Javob tezligi: ${firstAudioMs} ms ⚡`;
+                conversationHistory.push({ role: 'user', content: cleaned });
+                conversationHistory.push({ role: 'assistant', content: reply });
+                appendMessage('ai', reply);
+                if (data.audio_b64) {
+                    await playAudioBase64Promise(data.audio_b64, reply, false);
+                } else if (isCallActive) {
+                    setUIState('listening');
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                if (isCallActive) setUIState('listening');
+            }
+        }
+
+        // Universal Hardware WebAudio VAD + 180ms Pre-Roll + MediaRecorder -> /api/call/voice_turn_audio
+        let vadInterval = null;
+        let activeRecorder = null;
+        let recordedChunks = [];
+        let isRecordingUtterance = false;
+        let speechStartTime = 0;
+        let lastVoiceActivityTime = 0;
+        let voiceConsecutiveFrames = 0;
+        let totalVoicedFrames = 0;
+        let aiSpeechEndedAt = 0;
+        let delayedMicDest = null;
+
+        function getSupportedAudioMime() {
+            if (typeof MediaRecorder === 'undefined') return '';
+            const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+            for (const t of types) {
+                if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t;
+            }
+            return '';
+        }
+
+        async function handleEdgeAudioBlobTurn(audioBlob) {
+            if (!audioBlob || audioBlob.size < 1200 || !isCallActive) return;
+
+            if (turnAbortController) {
+                try { turnAbortController.abort(); } catch (e) {}
+            }
+            turnAbortController = new AbortController();
+
+            const turnCommitTime = performance.now();
+            setUIState('thinking', "⚡ Javob berilmoqda...");
+
+            try {
+                const formData = new FormData();
+                const ext = (audioBlob.type || '').includes('mp4') ? 'mp4' : 'webm';
+                formData.append('file', audioBlob, `speech.${ext}`);
+                formData.append('character', charSelect.value);
+                formData.append('language', langSelect.value);
+                formData.append('voice', voiceSelect.value);
+                formData.append('speed', '1.15');
+                formData.append('used_bridge', 'false');
+                formData.append('history_json', JSON.stringify(conversationHistory.slice(-4)));
+
+                const res = await fetch('/api/call/voice_turn_audio', {
+                    method: 'POST',
+                    signal: turnAbortController.signal,
+                    body: formData
+                });
+
+                if (!res.ok) throw new Error('Audio turn failed');
+                const data = await res.json();
+
+                const userText = (data.user_text || '').trim();
+                const reply = (data.reply || '').trim();
+
+                if (!userText || !reply) {
+                    if (isCallActive) setUIState('listening', "Eshitaman, gapiravering...");
+                    return;
+                }
+
+                appendMessage('user', userText);
+
+                const firstAudioMs = Math.round(performance.now() - turnCommitTime);
+                latencyBadge.textContent = `Javob tezligi: ${firstAudioMs} ms ⚡`;
+                conversationHistory.push({ role: 'user', content: userText });
+                conversationHistory.push({ role: 'assistant', content: reply });
+                appendMessage('ai', reply);
+                if (data.audio_b64) {
+                    await playAudioBase64Promise(data.audio_b64, reply, false);
+                } else if (isCallActive) {
+                    setUIState('listening', "Eshitaman, gapiravering...");
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                if (isCallActive) setUIState('listening', "Eshitaman, gapiravering...");
+            }
+        }
+
+        function startRecordingUtterance() {
+            if (isRecordingUtterance || !delayedMicDest) return;
+            try {
+                recordedChunks = [];
+                totalVoicedFrames = 3;
+                const mime = getSupportedAudioMime();
+                activeRecorder = mime
+                    ? new MediaRecorder(delayedMicDest.stream, { mimeType: mime })
+                    : new MediaRecorder(delayedMicDest.stream);
+
+                activeRecorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+                };
+
+                activeRecorder.onstop = () => {
+                    const dur = performance.now() - speechStartTime;
+                    const voicedCount = totalVoicedFrames;
+                    const blob = new Blob(recordedChunks, { type: activeRecorder ? activeRecorder.mimeType : 'audio/webm' });
+                    recordedChunks = [];
+                    isRecordingUtterance = false;
+                    totalVoicedFrames = 0;
+                    // Only send if user actually spoke (at least 9 voiced frames ~315ms and >= 400ms duration)
+                    if (dur >= 400 && voicedCount >= 9 && blob.size > 1200 && isCallActive) {
+                        handleEdgeAudioBlobTurn(blob);
+                    } else if (isCallActive && currentState === 'listening') {
+                        liveSubtitle.textContent = "Eshitaman, savolingizni ayting...";
+                    }
+                };
+
+                activeRecorder.start(80);
+                isRecordingUtterance = true;
+                speechStartTime = performance.now();
+                lastVoiceActivityTime = performance.now();
+                liveSubtitle.textContent = "🎙️ Siz gapiryapsiz...";
+            } catch (e) {
+                console.warn("Recorder start error:", e);
+                isRecordingUtterance = false;
+            }
+        }
+
+        function stopRecordingUtterance(cancelOnly = false) {
+            if (!isRecordingUtterance || !activeRecorder) return;
+            try {
+                if (cancelOnly) {
+                    activeRecorder.onstop = null;
+                    recordedChunks = [];
+                    isRecordingUtterance = false;
+                }
+                if (activeRecorder.state !== 'inactive') {
+                    activeRecorder.stop();
+                }
+            } catch (e) {
+                isRecordingUtterance = false;
+            }
+        }
+
+        function startHardwareVoiceVAD() {
+            if (vadInterval) clearInterval(vadInterval);
+            const timeDomainBuf = new Uint8Array(128);
+            voiceConsecutiveFrames = 0;
+
+            vadInterval = setInterval(() => {
+                if (!isCallActive || engineSelect.value !== 'edge_turbo' || !micAnalyser) return;
+
+                micAnalyser.getByteTimeDomainData(timeDomainBuf);
+                let sumSq = 0;
+                for (let i = 0; i < timeDomainBuf.length; i++) {
+                    const norm = (timeDomainBuf[i] - 128) / 128.0;
+                    sumSq += norm * norm;
+                }
+                const rms = Math.sqrt(sumSq / timeDomainBuf.length);
+                const now = performance.now();
+
+                // 1) If AI is speaking -> Check for intentional user Barge-In (gapni bo'lish)
+                if (currentState === 'speaking') {
+                    aiSpeechEndedAt = now;
+                    const msSinceAiStart = now - aiSpeechStartedAt;
+                    if (msSinceAiStart > 500 && rms > 0.085) {
+                        voiceConsecutiveFrames++;
+                        if (voiceConsecutiveFrames >= 5) {
+                            if (turnAbortController) {
+                                try { turnAbortController.abort(); } catch (e) {}
+                            }
+                            stopCurrentAudio();
+                            setUIState('listening', "🎙️ Gapni bo'ldingiz — eshityapman!");
+                            voiceConsecutiveFrames = 0;
+                            startRecordingUtterance();
+                        }
+                    } else {
+                        voiceConsecutiveFrames = 0;
+                    }
+                    return;
+                }
+
+                // Ignore room echo/reverb for 450ms right after AI stops speaking
+                if (now - aiSpeechEndedAt < 450) {
+                    voiceConsecutiveFrames = 0;
+                    return;
+                }
+
+                // 2) If Listening -> Detect real human speech (ignore quiet room noise < 0.036)
+                if (currentState === 'listening') {
+                    if (rms > 0.036) {
+                        voiceConsecutiveFrames++;
+                        lastVoiceActivityTime = now;
+                        if (isRecordingUtterance) {
+                            totalVoicedFrames++;
+                        } else if (voiceConsecutiveFrames >= 4) {
+                            startRecordingUtterance();
+                        }
+                    } else {
+                        voiceConsecutiveFrames = 0;
+                        if (isRecordingUtterance) {
+                            const silenceDuration = now - lastVoiceActivityTime;
+                            const totalSpeech = now - speechStartTime;
+                            const waitMs = Math.max(420, parseInt(silenceMsSelect.value || '380', 10));
+                            if (silenceDuration >= waitMs || totalSpeech > 9500) {
+                                stopRecordingUtterance(false);
+                            }
+                        }
+                    }
+                }
+            }, 35);
+        }
+
+        async function startEdgeTurboCall() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            await loadReflexPack();
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+            micStream = stream;
+            const source = audioCtx.createMediaStreamSource(stream);
+            micAnalyser = audioCtx.createAnalyser();
+            micAnalyser.fftSize = 128;
+            source.connect(micAnalyser);
+            micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+
+            // 180ms Pre-Roll DelayNode so the first syllable of speech is NEVER clipped!
+            const preRollDelay = audioCtx.createDelay(0.5);
+            preRollDelay.delayTime.value = 0.18;
+            delayedMicDest = audioCtx.createMediaStreamDestination();
+            source.connect(preRollDelay);
+            preRollDelay.connect(delayedMicDest);
+
+            isCallActive = true;
+            callToggleBtn.className = 'btn-call end';
+            callToggleBtn.innerHTML = '<span>📴 Qo\'ng\'iroqni yakunlash</span>';
+            startHardwareVoiceVAD();
+            setUIState('listening', "⚡ Sahiy aloqa markazi ulandi! Gapiravering!");
+
+            // Instant Sahiy greeting from 0ms cache
+            try {
+                const res = await fetch('/api/call/voice_turn', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: "alo",
+                        character: charSelect.value,
+                        history: [],
+                        language: langSelect.value,
+                        provider: 'free_ai',
+                        model: 'gpt-5.4-nano',
+                        voice: voiceSelect.value,
+                        speed: 1.15,
+                        used_bridge: false
+                    })
+                });
+                if (res.ok && isCallActive) {
+                    const data = await res.json();
+                    if (data.audio_b64) {
+                        appendMessage('ai', data.reply);
+                        await playAudioBase64Promise(data.audio_b64, data.reply, false);
+                    }
+                }
+            } catch (e) {}
+        }
+
+        async function startCall() {
+            if (engineSelect.value === 'webrtc') {
+                await startWebRTCCall();
+            } else {
+                await startEdgeTurboCall();
+            }
+        }
+
+        function stopCall() {
+            isCallActive = false;
+            callToggleBtn.disabled = false;
+            if (vadInterval) {
+                clearInterval(vadInterval);
+                vadInterval = null;
+            }
+            stopRecordingUtterance(true);
+            if (silenceTimer) clearTimeout(silenceTimer);
+            if (turnAbortController) {
+                try { turnAbortController.abort(); } catch (e) {}
+            }
+            stopCurrentAudio();
+            if (recognition) {
+                const r = recognition;
+                recognition = null;
+                try { r.abort(); } catch (e) {}
+            }
+            if (dataChannel) {
+                try { dataChannel.close(); } catch (e) {}
+                dataChannel = null;
+            }
+            if (peerConnection) {
+                try { peerConnection.close(); } catch (e) {}
+                peerConnection = null;
+            }
+            if (micStream) {
+                micStream.getTracks().forEach(t => t.stop());
+                micStream = null;
+            }
+            rtcAudioPlayer.srcObject = null;
+            callToggleBtn.className = 'btn-call start';
+            callToggleBtn.innerHTML = '<span>📞 Qo\'ng\'iroqni boshlash</span>';
+            setUIState('idle', "Qo'ng'iroq yakunlandi.");
+        }
+
+        document.querySelectorAll('.faq-chip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const q = btn.getAttribute('data-q');
+                if (q) handleEdgeTurboTurn(q);
+            });
+        });
+
+        callToggleBtn.addEventListener('click', () => {
+            if (isCallActive) stopCall();
+            else startCall();
+        });
+
+        function interruptAI() {
+            if (!isCallActive) {
+                startCall();
+                return;
+            }
+            if (engineSelect.value === 'webrtc' && dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ type: "response.cancel" }));
+                dataChannel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+                setUIState('listening', "Gapni bo'ldingiz — sizni eshitmoqdaman!");
+            } else {
+                stopCurrentAudio();
+                setUIState('listening', "Gapni bo'ldingiz — sizni eshitmoqdaman!");
+            }
+        }
+
+        interruptBtn.addEventListener('click', interruptAI);
+        orbWrapper.addEventListener('click', interruptAI);
+
+        textForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const val = textInput.value.trim();
+            if (!val) return;
+            textInput.value = '';
+
+            if (engineSelect.value === 'webrtc' && isCallActive && dataChannel && dataChannel.readyState === 'open') {
+                appendMessage('user', val);
+                dataChannel.send(JSON.stringify({ type: "response.cancel" }));
+                dataChannel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+                dataChannel.send(JSON.stringify({
+                    type: "conversation.item.create",
+                    item: {
+                        type: "message",
+                        role: "user",
+                        content: [{ type: "input_text", text: val }]
+                    }
+                }));
+                speechStopTimestamp = performance.now();
+                dataChannel.send(JSON.stringify({ type: "response.create" }));
+            } else {
+                await handleEdgeTurboTurn(val);
+            }
+        });
+
+        // 60FPS 3D Harmonic Audio-Reactive Orb Renderer
+        let phase = 0;
+        function renderOrb() {
+            requestAnimationFrame(renderOrb);
+            const w = orbCanvas.width;
+            const h = orbCanvas.height;
+            const cx = w / 2;
+            const cy = h / 2;
+
+            ctx.clearRect(0, 0, w, h);
+
+            let energy = 0.08;
+            if (currentState === 'speaking' && ttsAnalyser) {
+                ttsAnalyser.getByteFrequencyData(ttsDataArray);
+                let sum = 0;
+                for (let i = 0; i < ttsDataArray.length; i++) sum += ttsDataArray[i];
+                energy = Math.min(1.0, (sum / ttsDataArray.length) / 100);
+            } else if (currentState === 'listening' && micAnalyser) {
+                micAnalyser.getByteFrequencyData(micDataArray);
+                let sum = 0;
+                for (let i = 0; i < micDataArray.length; i++) sum += micDataArray[i];
+                energy = Math.min(1.0, (sum / micDataArray.length) / 90);
+            } else if (currentState === 'thinking') {
+                energy = 0.4 + 0.2 * Math.sin(phase * 4);
+            }
+
+            phase += 0.04 + energy * 0.11;
+
+            let colors = ['#6366f1', '#06b6d4', '#3b82f6'];
+            if (currentState === 'listening') {
+                colors = ['#10b981', '#06b6d4', '#34d399'];
+            } else if (currentState === 'thinking') {
+                colors = ['#a855f7', '#ec4899', '#6366f1'];
+            } else if (currentState === 'speaking') {
+                colors = ['#06b6d4', '#6366f1', '#38bdf8'];
+            }
+
+            const baseRadius = 145 + energy * 48;
+            const glow = ctx.createRadialGradient(cx, cy, baseRadius * 0.2, cx, cy, baseRadius * 1.65);
+            glow.addColorStop(0, colors[0] + '66');
+            glow.addColorStop(0.5, colors[1] + '22');
+            glow.addColorStop(1, 'transparent');
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(cx, cy, baseRadius * 1.65, 0, Math.PI * 2);
+            ctx.fill();
+
+            for (let ring = 0; ring < 4; ring++) {
+                ctx.beginPath();
+                const points = 120;
+                const ringRadius = baseRadius * (0.72 + ring * 0.09);
+                for (let i = 0; i <= points; i++) {
+                    const angle = (i / points) * Math.PI * 2;
+                    const wave1 = Math.sin(angle * (3 + ring) + phase * (1.2 + ring * 0.3)) * (10 + energy * 34);
+                    const wave2 = Math.cos(angle * (5 - ring) - phase * 1.5) * (6 + energy * 22);
+                    const r = ringRadius + wave1 + wave2;
+                    const x = cx + Math.cos(angle) * r;
+                    const y = cy + Math.sin(angle) * r;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.strokeStyle = colors[ring % colors.length] + (ring === 0 ? 'ee' : '88');
+                ctx.lineWidth = 3.5 - ring * 0.5;
+                ctx.stroke();
+
+                if (ring === 0) {
+                    const innerGrad = ctx.createRadialGradient(
+                        cx - 30, cy - 30, 10,
+                        cx, cy, ringRadius + 30
+                    );
+                    innerGrad.addColorStop(0, colors[1] + 'aa');
+                    innerGrad.addColorStop(0.6, colors[0] + '66');
+                    innerGrad.addColorStop(1, '#07090e');
+                    ctx.fillStyle = innerGrad;
+                    ctx.fill();
+                }
+            }
+        }
+        renderOrb();
+    </script>
+</body>
+</html>
