@@ -420,6 +420,7 @@
         </div>
         <ul class="nav-links">
             <li><a href="/call" class="active">🔥 ElevenLabs Call Mode</a></li>
+            <li><a href="/live-stt">🎙️ Live STT</a></li>
             <li><a href="/">Dashboard (Classic)</a></li>
             <li><a href="/enhanced">Enhanced</a></li>
             <li><a href="/webrtc_realtime">WebRTC Realtime</a></li>
@@ -1292,6 +1293,114 @@
             }, 35);
         }
 
+        let liveSttSocket = null;
+        let liveSttProcessor = null;
+        let liveSttReady = false;
+        let liveSttLeftover = new Float32Array(0);
+        let liveSttPartials = new Map();
+
+        function encodePCM24k(samples) {
+            const buf = new ArrayBuffer(samples.length * 2);
+            const view = new DataView(buf);
+            for (let i = 0; i < samples.length; i++) {
+                const s = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(i * 2, s * 32767, true);
+            }
+            return buf;
+        }
+
+        function resampleTo24k(samples, fromRate) {
+            const all = new Float32Array(liveSttLeftover.length + samples.length);
+            all.set(liveSttLeftover);
+            all.set(samples, liveSttLeftover.length);
+            const step = fromRate / 24000;
+            const out = [];
+            let pos = 0;
+            while (pos + 1 < all.length) {
+                const j = Math.floor(pos);
+                const frac = pos - j;
+                out.push(all[j] * (1 - frac) + all[j + 1] * frac);
+                pos += step;
+            }
+            liveSttLeftover = all.slice(Math.floor(pos));
+            return new Float32Array(out);
+        }
+
+        function startLiveSttStream(micSourceNode) {
+            stopLiveSttStream();
+            try {
+                const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                liveSttSocket = new WebSocket(wsProto + location.host + '/ws/live-stt');
+                liveSttPartials.clear();
+
+                liveSttSocket.onmessage = (e) => {
+                    try {
+                        const m = JSON.parse(e.data);
+                        const type = m.type;
+                        if (type === 'ready') {
+                            liveSttReady = true;
+                        } else if (type === 'conversation.item.input_audio_transcription.delta') {
+                            const id = m.item_id || 'cur';
+                            const cur = (liveSttPartials.get(id) || '') + (m.delta || '');
+                            liveSttPartials.set(id, cur);
+                            if (currentState === 'listening' && cur.trim()) {
+                                liveSubtitle.textContent = `🎙️ Siz: ${cur.trim()}...`;
+                                startSpeculativeFetch(cur.trim(), false);
+                            }
+                        } else if (type === 'conversation.item.input_audio_transcription.completed') {
+                            const id = m.item_id || 'cur';
+                            liveSttPartials.delete(id);
+                            const tx = (m.transcript || '').trim();
+                            if (tx.length >= 2 && isCallActive && currentState === 'listening') {
+                                stopRecordingUtterance(true);
+                                handleEdgeTurboTurn(tx);
+                            }
+                        } else if (type === 'error') {
+                            liveSttReady = false;
+                        }
+                    } catch (err) {}
+                };
+
+                liveSttSocket.onclose = () => {
+                    liveSttReady = false;
+                };
+
+                liveSttProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
+                liveSttProcessor.onaudioprocess = (e) => {
+                    if (!isCallActive || !liveSttReady || !liveSttSocket || liveSttSocket.readyState !== WebSocket.OPEN) return;
+                    if (currentState !== 'listening' || (performance.now() - aiSpeechEndedAt < 450)) return;
+                    // Only stream when user is actively speaking or within 700ms tail so room silence is never sent!
+                    if (!isRecordingUtterance && (performance.now() - lastVoiceActivityTime > 700)) return;
+                    if (liveSttSocket.bufferedAmount > 250000) return;
+                    const resampled = resampleTo24k(e.inputBuffer.getChannelData(0), audioCtx.sampleRate);
+                    if (resampled.length > 0) {
+                        liveSttSocket.send(encodePCM24k(resampled));
+                    }
+                };
+                micSourceNode.connect(liveSttProcessor);
+                liveSttProcessor.connect(audioCtx.destination);
+            } catch (err) {
+                liveSttReady = false;
+            }
+        }
+
+        function stopLiveSttStream() {
+            liveSttReady = false;
+            liveSttLeftover = new Float32Array(0);
+            liveSttPartials.clear();
+            if (liveSttProcessor) {
+                try {
+                    liveSttProcessor.disconnect();
+                    liveSttProcessor.onaudioprocess = null;
+                } catch (e) {}
+                liveSttProcessor = null;
+            }
+            if (liveSttSocket) {
+                try { liveSttSocket.close(); } catch (e) {}
+                liveSttSocket = null;
+            }
+        }
+
         async function startEdgeTurboCall() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1326,6 +1435,7 @@
             callToggleBtn.className = 'btn-call end';
             callToggleBtn.innerHTML = '<span>📴 Qo\'ng\'iroqni yakunlash</span>';
             startHardwareVoiceVAD();
+            startLiveSttStream(source);
             setUIState('listening', "⚡ Sahiy aloqa markazi ulandi! Gapiravering!");
 
             // Instant Sahiy greeting from 0ms cache
@@ -1366,6 +1476,7 @@
         function stopCall() {
             isCallActive = false;
             callToggleBtn.disabled = false;
+            stopLiveSttStream();
             if (vadInterval) {
                 clearInterval(vadInterval);
                 vadInterval = null;

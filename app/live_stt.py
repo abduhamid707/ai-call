@@ -9,13 +9,28 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 
+from dotenv import load_dotenv
+from .speech_cleanup import clean_transcript
+
+load_dotenv()
+
 router = APIRouter()
 
-def transcription_session():
-    language = os.getenv("LIVE_STT_LANGUAGE", "uz").strip()
-    prompt = os.getenv("LIVE_STT_VOCABULARY_HINTS", "O'zbek tilidagi suhbat. Tovarim, buyurtma, mahsulot, yetkazib berish.").strip()
+# OpenAI Realtime transcription language whitelist (note: 'uz' is not in OpenAI's ISO whitelist and must use auto-detect + prompt)
+_SUPPORTED_REALTIME_LANGS = {
+    "af", "ar", "az", "be", "bg", "bs", "ca", "cs", "cy", "da", "de", "el",
+    "en", "es", "et", "fa", "fi", "fr", "gl", "he", "hi", "hr", "hu", "hy",
+    "id", "is", "it", "iw", "ja", "kk", "kn", "ko", "lt", "lv", "mi", "mk",
+    "mr", "ms", "ne", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sr",
+    "sv", "sw", "ta", "th", "tl", "tr", "uk", "ur", "vi", "zh",
+}
+
+
+def transcription_session(silence_ms: int = 420):
+    language = os.getenv("LIVE_STT_LANGUAGE", "uz").strip().lower()
+    prompt = os.getenv("LIVE_STT_VOCABULARY_HINTS", "").strip()
     transcription = {"model": os.getenv("LIVE_STT_MODEL", "gpt-4o-transcribe")}
-    if language:
+    if language in _SUPPORTED_REALTIME_LANGS:
         transcription["language"] = language
     if prompt:
         transcription["prompt"] = prompt[:1000]
@@ -28,9 +43,9 @@ def transcription_session():
                 "noise_reduction": {"type": "near_field"},
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.35,
-                    "prefix_padding_ms": 500,
-                    "silence_duration_ms": 850,
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 400,
+                    "silence_duration_ms": silence_ms,
                 },
             }
         },
@@ -95,11 +110,13 @@ async def live_stt_socket(client: WebSocket):
                     "input_audio_buffer.speech_stopped",
                     "error",
                 ):
+                    raw_tx = event.get("transcript", "")
+                    cleaned_tx = clean_transcript(raw_tx) if kind == "conversation.item.input_audio_transcription.completed" else raw_tx
                     await client.send_json({
                         "type": kind,
                         "item_id": event.get("item_id"),
                         "delta": event.get("delta", ""),
-                        "transcript": event.get("transcript", ""),
+                        "transcript": cleaned_tx,
                         "message": event.get("error", {}).get("message", "") if isinstance(event.get("error"), dict) else "",
                     })
 
