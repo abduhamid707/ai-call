@@ -46,92 +46,10 @@ _SYNC_SESSION = requests.Session()
 _TTS_CACHE: dict[tuple[str, str, str], bytes] = {}
 _PROMPT_CACHE: dict[str, str] = {}
 
-OUT_OF_SCOPE_REPLY = (
-    "Kechirasiz, men faqat Sahiy kompaniyasi xizmatlari bo'yicha ma'lumot bera olaman. "
-    "Yetkazib berish, to'lovlar yoki buyurtma bo'yicha savolingiz bormi?"
-)
+CALL_CONNECT_GREETING = "Assalomu alaykum! Eshitaman, sizga qanday yordam bera olaman?"
+FALLBACK_ERROR_REPLY = "Uzr, aloqada qisqa uzilish bo'ldi, savolingizni qaytarib yuborasizmi?"
 
-# Official Sahiy FAQ Knowledge Base (0ms Instant Match + Pre-synthesized Audio)
-SAHIY_FAQ_ITEMS = [
-    {
-        "id": "greeting",
-        "question": "Salomlashish va bog'lanish",
-        "pattern": re.compile(r"^(alo+|allo+|alyo+|assalomu\s+alaykum|salom|salom\s+alaykum|vaalaykum\s+assalom|eshityapsizmi)[\?\!\.]*$", re.I),
-        "answer": "Assalomu alaykum! Sahiy aloqa markaziga xush kelibsiz. Sizga qanday yordam bera olaman?",
-    },
-    {
-        "id": "how_are_you",
-        "question": "Hol-ahvol so'rash",
-        "pattern": re.compile(r"^(qalaysiz|yaxshimisiz|ishlar\s+qalay|ahvollar\s+qalay|salom\s+qalaysiz)[\?\!\.]*$", re.I),
-        "answer": "Rahmat, juda yaxshi! Sahiy xizmatlari bo'yicha qanday savolingiz bor?",
-    },
-    {
-        "id": "about_sahiy",
-        "question": "Sahiy qanday kompaniya va nima sotadi?",
-        "pattern": re.compile(r"(sahiy\s+nima|saxiy\s+nima|sahi\s+nima|qanaqa\s+kompaniya|nima\s+bilan\s+shug|nima\s+sotasiz|nimalar\s+bor|sahiy\s+haqida|saxiy\s+haqida|sahi\s+haqida|kim\s+bu)", re.I),
-        "answer": "Sahiy — O'zbekistondagi ishonchli onlayn savdo platformasi bo'lib, kitoblar, maishiy texnika va elektronikani hamyonbop narxda yetkazib beradi.",
-    },
-    {
-        "id": "delivery",
-        "question": "Yetkazib berish (dostavka) muddati va narxi qancha?",
-        "pattern": re.compile(r"(yetkazib\s+berish|yitkazib\s+berish|dostavka|dastavka|qancha\s+vaqtda\s+keladi|qancha\s+vaqt\s+oladi|necha\s+kunda\s+keladi|viloyatga\s+chiqadimi|pochta)", re.I),
-        "answer": "Toshkent bo'ylab 24 soatda, viloyatlarga 2-3 ish kunida yetkazib beramiz. 300 ming so'mdan oshsa yetkazib berish bepul.",
-    },
-    {
-        "id": "installment",
-        "question": "Bo'lib to'lash (muddatli to'lov / nasiya) bormi?",
-        "pattern": re.compile(r"(bo'lib\s+to'lash|bolib\s+tolash|muddatli\s+to'lov|nasiya|rassrochka|rasrochka|kredit|necha\s+oyga)", re.I),
-        "answer": "Ha, Sahiy orqali boshlang'ich to'lovsiz va ribosiz 3, 6 hamda 12 oyga halol bo'lib to'lash mavjud. Faqat pasport kifoya.",
-    },
-    {
-        "id": "payment",
-        "question": "To'lov turlari qanday?",
-        "pattern": re.compile(r"(to'lov\s+turlari|qanday\s+to'lov|click|payme|uzum|naqd|karta\s+orqali|pul\s+o'tkazish)", re.I),
-        "answer": "To'lovni Click, Payme, Uzum, bank kartalari yoki buyurtmani qo'lingizga olganda naqd pulda amalga oshirishingiz mumkin.",
-    },
-    {
-        "id": "working_hours",
-        "question": "Ish vaqti soat nechadan nechagacha?",
-        "pattern": re.compile(r"(ish\s+vaqti|soat\s+nechada|qachon\s+ishlaysiz|dam\s+olish\s+kuni|ochiqmisiz|necha\s+dan\s+necha)", re.I),
-        "answer": "Sahiy aloqa markazi va yetkazib berish xizmati har kuni dam olish kunlarisiz soat 09:00 dan 22:00 gacha ishlaydi.",
-    },
-    {
-        "id": "address",
-        "question": "Manzilingiz qayerda joylashgan?",
-        "pattern": re.compile(r"(manzil|adres|qayerda\s+joylashgan|ofisingiz\s+qayerda|qayerga\s+borsam|lokatsiya|filial)", re.I),
-        "answer": "Bosh ofisimiz Toshkent shahri, Chilonzor tumani, Bunyodkor shoh ko'chasida joylashgan. Barcha viloyatlarda topshirish punktlarimiz bor.",
-    },
-    {
-        "id": "warranty",
-        "question": "Kafolat va mahsulotni qaytarish shartlari qanday?",
-        "pattern": re.compile(r"(kafolat|garantiya|qaytarish|vozvrat|almashtirish|nuqson|buzilib\s+qolsa)", re.I),
-        "answer": "Barcha mahsulotlarga 1 yilgacha rasmiy kafolat beriladi. Nuqson bo'lsa, 10 kun ichida almashtirish yoki pulni qaytarib olish mumkin.",
-    },
-    {
-        "id": "how_to_order",
-        "question": "Qanday buyurtma bersam bo'ladi?",
-        "pattern": re.compile(r"(qanday\s+buyurtma|zakaz\s+berish|buyurtma\s+bermoqchi|qanday\s+olaman|sotib\s+olmoqchi|telegram\s+bot|sayt)", re.I),
-        "answer": "Buyurtmani Sahiy sayti, Telegram botimiz yoki hozirning o'zida menga mahsulot nomi va manzilingizni aytib rasmiylashtirishingiz mumkin.",
-    },
-    {
-        "id": "discounts",
-        "question": "Chegirmalar va keshbek bormi?",
-        "pattern": re.compile(r"(chegirma|aksiya|skidka|keshbek|bonus|arzonroq)", re.I),
-        "answer": "Doimiy mijozlarimiz uchun har bir xariddan 5 foiz keshbek va 30 foizgacha maxsus chegirmalar amal qiladi.",
-    },
-    {
-        "id": "thanks",
-        "question": "Minnatdorchilik",
-        "pattern": re.compile(r"^(rahmat|katta\s+rahmat|tashakkur|rahmat\s+sizga|tushunarli\s+rahmat)[\?\!\.]*$", re.I),
-        "answer": "Arzimaydi! Sahiy xizmatlaridan foydalanganingiz uchun rahmat. Yana savolingiz bormi?",
-    },
-    {
-        "id": "goodbye",
-        "question": "Xayrlashish",
-        "pattern": re.compile(r"^(xayr|ko'rishguncha|sog'\s+bo'ling|bo'pti\s+xayr|mayli\s+xayr)[\?\!\.]*$", re.I),
-        "answer": "Xayr, salomat bo'ling! Sahiy sizga xizmat ko'rsatishdan doim mamnun.",
-    },
-]
+SAHIY_FAQ_ITEMS: list[dict] = []
 
 VOICE_BRIDGES = {
     "uz-UZ": {
@@ -297,8 +215,8 @@ def get_character_system_prompt(character: str) -> str:
         _PROMPT_CACHE[character] = prompt
         return prompt
     return (
-        "Siz 'Sahiy' kompaniyasining rasmiy ovozli aloqa markazi operatorisiz. "
-        "FAQAT Sahiy FAQ ma'lumotlari asosida qisqa (1-2 gap) javob bering."
+        "Siz aqlli, samimiy va universal ovozli AI yordamchisiz. "
+        "Har qanday mavzudagi savollarga cheklovlarsiz, aniq va tabiiy javob bering."
     )
 
 
@@ -418,14 +336,14 @@ def free_ai_chat_sync(messages: list[dict], model: str = "gpt-4.1-mini", max_tok
     except Exception as e:
         print(f"Sync OpenAI warning: {e}")
 
-    return "Sahiy aloqa markazi eshitadi, marhamat."
+    return "Eshitaman, marhamat."
 
 
 async def fast_llm_reply_async(
     messages: list[dict],
     model: str = "gpt-5.4-nano",
     provider: str = "free_ai",
-    max_tokens: int = 55,
+    max_tokens: int = 160,
 ) -> str:
     """Ultra-low-latency async LLM call using persistent IPv4 connection pool & gpt-5.4-nano."""
     client = get_http_client()
@@ -491,11 +409,11 @@ async def fast_llm_reply_async(
     except Exception as e:
         print(f"Async fast LLM error: {e}")
 
-    return OUT_OF_SCOPE_REPLY
+    return FALLBACK_ERROR_REPLY
 
 
 async def warmup_connections():
-    """Pre-warm OpenAI IPv4 TLS, Persistent Edge-TTS WebSocket, and ALL Sahiy FAQ answers in RAM."""
+    """Pre-warm OpenAI IPv4 TLS, Persistent Edge-TTS WebSocket, and universal call greeting in RAM."""
     try:
         client = get_http_client()
         api_key = get_active_openai_key()
@@ -504,15 +422,8 @@ async def warmup_connections():
             headers={"Authorization": f"Bearer {api_key}"},
         )
         for v in ("uz-UZ-SardorNeural", "uz-UZ-MadinaNeural"):
-            await generate_edge_tts_audio("Albatta,", voice=v, speed=1.15)
-            await generate_edge_tts_audio("Tushunarli,", voice=v, speed=1.15)
-            await generate_edge_tts_audio(OUT_OF_SCOPE_REPLY, voice=v, speed=1.15)
-            for item in SAHIY_FAQ_ITEMS:
-                await generate_edge_tts_audio(item["answer"], voice=v, speed=1.15)
-                stripped = strip_duplicate_opener(item["answer"])
-                if stripped != item["answer"]:
-                    await generate_edge_tts_audio(stripped, voice=v, speed=1.15)
-        print("Sahiy FAQ audio cache pre-warmed in RAM (0ms TTS ready!)")
+            await generate_edge_tts_audio(CALL_CONNECT_GREETING, voice=v, speed=1.15)
+        print("Universal Voice AI audio cache & connections pre-warmed!")
     except Exception as e:
         print(f"Warmup info: {e}")
 
@@ -559,7 +470,7 @@ async def get_network_info():
         "wifi_url": f"http://{local_ip}:8000/call",
         "https_url": os.getenv(
             "PUBLIC_HTTPS_URL",
-            "https://contributing-falling-moderate-iron.trycloudflare.com/call",
+            "https://scoop-shakespeare-tier-legs.trycloudflare.com/call",
         ),
     }
 
@@ -580,15 +491,14 @@ async def api_call_reflex_pack(voice: str = "uz-UZ-SardorNeural", speed: float =
 
 def _build_call_messages(user_text: str, character: str, history: list, language: str) -> list[dict]:
     system_prompt = get_character_system_prompt(character)
-    strict_faq_rule = (
-        "QAT'IY QOIDA: Siz Sahiy kompaniyasi rasmiy aloqa markazi operatorisiz. "
-        "FAQAT Sahiy FAQ ma'lumotlari asosida 1-2 ta qisqa gap bilan javob bering. "
-        "Gapni 'Albatta', 'Tushunarli', 'Ha' so'zlari bilan BOSHLAMANG. "
-        f"Agar savol Sahiy FAQ bazasida bo'lmasa, hech narsa to'qimasdan AYNAN mana shu jumlani qaytaring: '{OUT_OF_SCOPE_REPLY}'"
+    voice_style_rule = (
+        "USLUB: Hech qanday mavzu cheklovi yo'q — foydalanuvchining istalgan savoliga erkin, to'liq va aniq javob bering. "
+        "Jonli ovozli suhbat bo'lgani uchun ravon, samimiy va tushunarli gapiring (odatda 1-3 gap). "
+        "Har safar gapni 'Albatta' deb boshlamang."
     )
 
-    messages = [{"role": "system", "content": f"{system_prompt}\n\n{strict_faq_rule}"}]
-    for item in history[-4:]:
+    messages = [{"role": "system", "content": f"{system_prompt}\n\n{voice_style_rule}"}]
+    for item in history[-8:]:
         if item.get("role") in ("user", "assistant") and item.get("content"):
             messages.append({"role": item["role"], "content": item["content"]})
     messages.append({"role": "user", "content": user_text})
@@ -596,14 +506,9 @@ def _build_call_messages(user_text: str, character: str, history: list, language
 
 
 def _match_sahiy_faq(user_text: str) -> str | None:
-    """0ms deterministic FAQ matcher for Sahiy questions."""
-    normalized = re.sub(r"[^\w\s\']", " ", user_text.strip().lower())
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    if not normalized:
-        return None
-    for item in SAHIY_FAQ_ITEMS:
-        if item["pattern"].search(normalized):
-            return item["answer"]
+    """Instant greeting only for automatic call-connect handshake; no topic restrictions."""
+    if user_text.strip() == "__call_connect__":
+        return CALL_CONNECT_GREETING
     return None
 
 
@@ -638,7 +543,7 @@ async def _process_text_turn(
         }
 
     messages = _build_call_messages(user_text, character, history, language)
-    reply_text = await fast_llm_reply_async(messages, model=model, provider=provider, max_tokens=55)
+    reply_text = await fast_llm_reply_async(messages, model=model, provider=provider, max_tokens=160)
     reply_text = clean_text_for_tts(reply_text)
     if used_bridge:
         reply_text = strip_duplicate_opener(reply_text)
@@ -859,13 +764,9 @@ async def api_call_chat(request: Request):
     if not user_text:
         return JSONResponse({"error": "Empty message"}, status_code=400)
 
-    faq_reply = _match_sahiy_faq(user_text)
-    if faq_reply:
-        return {"reply": faq_reply, "latency_ms": 1, "character": character}
-
     messages = _build_call_messages(user_text, character, history, language)
     t0 = time.perf_counter()
-    reply_text = await fast_llm_reply_async(messages, model=model, provider=provider, max_tokens=55)
+    reply_text = await fast_llm_reply_async(messages, model=model, provider=provider, max_tokens=160)
     reply_text = clean_text_for_tts(reply_text)
     latency_ms = int((time.perf_counter() - t0) * 1000)
 

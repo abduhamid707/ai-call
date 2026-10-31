@@ -14,7 +14,6 @@ from fastapi.responses import HTMLResponse
 
 from .speech_cleanup import clean_transcript
 from .elevenlabs_call import (
-    _match_sahiy_faq,
     generate_edge_tts_audio,
     get_character_system_prompt,
 )
@@ -111,15 +110,6 @@ async def live_stt_socket(client: WebSocket):
                     history.append({"role": "user", "content": question})
                     history[:] = history[:1] + history[-14:]
                     await emit({"type": "agent_thinking", "turn_id": turn_id})
-
-                    # Fast-path: 0ms Sahiy FAQ match + 0ms RAM TTS cache
-                    faq_answer = _match_sahiy_faq(question)
-                    if faq_answer:
-                        await emit({"type": "agent_text_delta", "turn_id": turn_id, "delta": faq_answer})
-                        await synthesize(http, turn_id, 0, faq_answer)
-                        history.append({"role": "assistant", "content": faq_answer})
-                        await emit({"type": "agent_done", "turn_id": turn_id, "chunks": 1})
-                        continue
 
                     async with http.post(
                         "https://api.openai.com/v1/chat/completions",
