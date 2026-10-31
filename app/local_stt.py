@@ -173,7 +173,7 @@ def _get_model(config: LocalSTTConfig):
 
 
 class StreamingSileroVAD:
-    """Per-stream recurrent state for bundled faster-whisper 1.1.1 Silero v5.
+    """Per-stream recurrent state for bundled faster-whisper Silero VAD (v4/v5 ONNX).
 
     ONNX sessions contain the weights, while context/state belong exclusively to
     this microphone. Calling the offline VAD on each frame would reset state.
@@ -181,16 +181,16 @@ class StreamingSileroVAD:
 
     def __init__(self, model):
         self._model = model
-        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._h = np.zeros((1, 1, 128), dtype=np.float32)
+        self._c = np.zeros((1, 1, 128), dtype=np.float32)
         self._context = np.zeros((1, 64), dtype=np.float32)
 
     def __call__(self, audio: np.ndarray) -> float:
-        window = np.concatenate((self._context, audio.reshape(1, -1)), axis=1)
-        encoded = self._model.encoder_session.run(None, {"input": window})[0]
-        probability, self._state = self._model.decoder_session.run(
-            None, {"input": encoded.reshape(1, 128), "state": self._state}
+        window = np.concatenate((self._context, audio.reshape(1, -1)), axis=1).astype(np.float32)
+        probability, self._h, self._c = self._model.session.run(
+            None, {"input": window, "h": self._h, "c": self._c}
         )
-        self._context = audio[-64:].reshape(1, -1).copy()
+        self._context = audio[-64:].reshape(1, -1).astype(np.float32).copy()
         return float(np.asarray(probability).reshape(-1)[0])
 
 

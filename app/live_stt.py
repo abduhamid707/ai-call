@@ -181,10 +181,22 @@ async def start_transcriber(client, transcriber, timeout=80):
 @router.websocket("/ws/live-stt")
 async def live_stt_socket(client: WebSocket):
     global _active_sessions
+    # Permit local, LAN, and public HTTPS tunnel domains (trycloudflare.com, ngrok, etc.)
     origin = client.headers.get("origin")
-    if origin and urlsplit(origin).netloc.lower() != client.headers.get("host", "").lower():
-        await client.close(code=1008)
-        return
+    host = client.headers.get("host", "").lower()
+    if origin:
+        origin_netloc = urlsplit(origin).netloc.lower()
+        # Accept if origin matches host, or is localhost/LAN, or tunnel
+        is_safe = (
+            origin_netloc == host
+            or origin_netloc.startswith("localhost")
+            or origin_netloc.startswith("127.0.0.1")
+            or "trycloudflare.com" in origin_netloc
+            or "ngrok" in origin_netloc
+        )
+        if not is_safe:
+            await client.close(code=1008)
+            return
     await client.accept()
     transcriber = agent = None
     admitted = False
@@ -250,10 +262,10 @@ async def live_stt_socket(client: WebSocket):
             await emit({"type": "error", "message": str(exc) or "Nutq serveri javob bermadi."})
         except (RuntimeError, WebSocketDisconnect):
             pass
-    except Exception:
-        logger.warning("Live STT transport failed", exc_info=False)
+    except Exception as exc:
+        logger.warning("Live STT transport failed: %s (%s)", type(exc).__name__, exc, exc_info=True)
         try:
-            await emit({"type": "error", "message": "Jonli transkripsiyada uzilish. Qayta ulang."})
+            await emit({"type": "error", "message": f"Jonli transkripsiyada uzilish: {exc}"})
         except (RuntimeError, WebSocketDisconnect):
             pass
     finally:
