@@ -139,6 +139,7 @@ class PersistentEdgeTTS:
                         )
                     )
                     buf = bytearray()
+                    turn_finished = False
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.BINARY:
                             if len(msg.data) >= 2:
@@ -148,17 +149,33 @@ class PersistentEdgeTTS:
                                     buf.extend(data)
                         elif msg.type == aiohttp.WSMsgType.TEXT:
                             if "Path:turn.end" in msg.data:
+                                turn_finished = True
                                 break
                         elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                             self._ws = None
                             break
-                    if buf:
+                    if buf and turn_finished:
                         return bytes(buf)
+                    await self._discard_socket()
+                except asyncio.CancelledError:
+                    # A cancelled request leaves audio/turn.end frames unread.
+                    # Detach before awaiting close so no later call can consume
+                    # that audio or cache it under a different customer's text.
+                    await self._discard_socket()
+                    raise
                 except Exception:
-                    self._ws = None
+                    await self._discard_socket()
                     if attempt == 1:
                         raise
         return b""
+
+    async def _discard_socket(self):
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            try:
+                await asyncio.wait_for(ws.close(), timeout=2)
+            except Exception:
+                pass
 
 
 _EDGE_POOL = PersistentEdgeTTS()
@@ -497,7 +514,19 @@ def _build_call_messages(user_text: str, character: str, history: list, language
         "Har safar gapni 'Albatta' deb boshlamang."
     )
 
-    messages = [{"role": "system", "content": f"{system_prompt}\n\n{voice_style_rule}"}]
+    language_code = (language or "auto").lower().split("-")[0]
+    language_rule = {
+        "uz": "O'zbek tilida, lotin yozuvida javob bering.",
+        "ru": "Отвечайте на русском языке.",
+        "en": "Reply in English.",
+        "tr": "Türkçe yanıt verin.",
+    }.get(language_code, "Reply in the language the customer is using; do not translate their words unnecessarily.")
+    recognition_rule = (
+        "The user's words may come from speech recognition. Preserve names, numbers, order IDs, "
+        "quantities and negation. Never silently rewrite an uncertain phrase into an assumed order "
+        "or action. Ask one short clarifying question when meaning is unclear."
+    )
+    messages = [{"role": "system", "content": f"{system_prompt}\n\n{voice_style_rule}\n{language_rule}\n{recognition_rule}"}]
     for item in history[-8:]:
         if item.get("role") in ("user", "assistant") and item.get("content"):
             messages.append({"role": item["role"], "content": item["content"]})
@@ -522,6 +551,7 @@ async def _process_text_turn(
     voice: str,
     speed: float,
     used_bridge: bool,
+    needs_confirmation: bool = False,
 ) -> dict:
     t0 = time.perf_counter()
 
@@ -543,6 +573,11 @@ async def _process_text_turn(
         }
 
     messages = _build_call_messages(user_text, character, history, language)
+    if needs_confirmation:
+        messages[0]["content"] += (
+            "\nThe audio decoder flagged this utterance as uncertain. Ask the customer to confirm "
+            "or repeat the unclear part before interpreting an order, amount, number or instruction."
+        )
     reply_text = await fast_llm_reply_async(messages, model=model, provider=provider, max_tokens=160)
     reply_text = clean_text_for_tts(reply_text)
     if used_bridge:
@@ -576,11 +611,12 @@ async def api_call_voice_turn(request: Request):
     voice = data.get("voice") or "uz-UZ-SardorNeural"
     speed = float(data.get("speed") or 1.15)
     used_bridge = bool(data.get("used_bridge", False))
+    needs_confirmation = data.get("needs_confirmation") is True
 
     if not user_text:
         return JSONResponse({"error": "Empty message"}, status_code=400)
 
-    res = await _process_text_turn(
+    work = _process_text_turn(
         user_text=user_text,
         character=character,
         history=history,
@@ -590,47 +626,44 @@ async def api_call_voice_turn(request: Request):
         voice=voice,
         speed=speed,
         used_bridge=used_bridge,
+        needs_confirmation=needs_confirmation,
     )
-    return res
+    return await _until_client_disconnect(request, work)
 
 
-HALLUCINATION_SUBSTRINGS = (
-    "subtitles",
-    "amara.org",
-    "thank you for watching",
-    "thanks for watching",
-    "продолжение следует",
-    "редактор субтитров",
-    "assalomu alaykum, salom, sahiy haqida",
-    "dostavka bormi, bo'lib to'lash, muddatli to'lov",
-    "lotin alifbosida",
-    "o'zbek tilida:",
-    "www.",
-    "http",
-)
+async def _until_client_disconnect(request: Request, work):
+    """Abort obsolete LLM/TTS work when the browser barges in or hangs up."""
+    async def disconnected():
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                return
+    operation = asyncio.create_task(work)
+    watcher = asyncio.create_task(disconnected())
+    try:
+        async with asyncio.timeout(60):
+            done, _ = await asyncio.wait({operation, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            if watcher in done:
+                operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
+                return Response(status_code=499)
+            return operation.result()
+    finally:
+        for task in (operation, watcher):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(operation, watcher, return_exceptions=True)
 
 
 def _is_hallucinated_transcript(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if len(t) < 2:
-        return True
-    if not any(ch.isalpha() for ch in t):
-        return True
-    if t in {".", "..", "...", "you", "thank you", "bye", "uh", "um", "ah", "oh", "hmm", "ha", "a", "o"}:
-        return True
-    for sub in HALLUCINATION_SUBSTRINGS:
-        if sub in t:
-            return True
-    return False
+    # Text alone cannot prove hallucination. "ha", "7", a phone number, a URL
+    # and "thank you" can all be valid customer answers. Reject only no content;
+    # speech evidence belongs to VAD/decoder confidence, not a word blacklist.
+    return not any(ch.isalnum() for ch in (text or ""))
 
 
-async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/webm") -> str:
-    """
-    Ultra-fast Uzbek/Multilingual speech transcription using OpenAI gpt-4o-mini-transcribe.
-    1. Decodes audio to 16kHz PCM via PyAV.
-    2. Runs a strict NumPy Human Speech Energy Gate: rejects room noise, clicks, or breathing in 0ms!
-    3. Sends clean speech to gpt-4o-mini-transcribe WITHOUT a long prompt (zero prompt-echo hallucinations!).
-    """
+async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/webm", language: str = "auto") -> str:
+    """Legacy explicit file-upload ASR; live calls use the WebSocket pipeline."""
     import av
     import numpy as np
 
@@ -645,26 +678,16 @@ async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/web
                 rframes = [rframes] if rframes is not None else []
             for rf in rframes:
                 pcm_chunks.append(rf.to_ndarray().tobytes())
+        for rf in resampler.resample(None):
+            pcm_chunks.append(rf.to_ndarray().tobytes())
         container.close()
 
         pcm_data = b"".join(pcm_chunks)
-        if len(pcm_data) < 9600:  # Require at least 0.30s of recorded audio
+        if len(pcm_data) < 3200:  # 100 ms; short confirmations are meaningful.
             return ""
-
-        # Adaptive Server-Side Speech Energy Gate (20ms frames = 320 samples at 16kHz)
-        samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32)
-        n_frames = len(samples) // 320
-        if n_frames < 15:
-            return ""
-        frames = samples[: n_frames * 320].reshape(n_frames, 320)
-        frame_rms = np.sqrt(np.mean(frames * frames, axis=1))
-        peak_rms = float(np.max(frame_rms))
-        noise_floor = float(np.percentile(frame_rms, 20))
-        speech_gate = max(650.0, noise_floor * 2.2)
-        voiced_frames = int(np.sum(frame_rms > speech_gate))
-
-        # Reject background room noise, clicks, coughs, or breathing immediately!
-        if peak_rms < max(950.0, noise_floor * 2.8) or voiced_frames < 10:
+        # Do not reject quiet speech using a hard amplitude threshold. The live
+        # path has trained VAD; this explicit batch endpoint rejects digital zero.
+        if not np.any(np.frombuffer(pcm_data, dtype="<i2")):
             return ""
 
         with wave.open(wav_io, "wb") as wf:
@@ -683,6 +706,9 @@ async def transcribe_audio_fast(raw_bytes: bytes, content_type: str = "audio/web
 
     try:
         stt_data = {"model": "gpt-4o-mini-transcribe"}
+        language_code = (language or "auto").lower().split("-")[0]
+        if language_code in {"ru", "en", "tr"}:
+            stt_data["language"] = language_code
         vocab_hints = (os.getenv("STT_VOCABULARY_HINTS") or "").strip()
         if vocab_hints:
             stt_data["prompt"] = vocab_hints[:300]
@@ -715,16 +741,13 @@ async def api_call_voice_turn_audio(
     used_bridge: bool = Form(False),
     history_json: str = Form("[]"),
 ):
-    """
-    Single-roundtrip Audio -> Sahiy FAQ -> Neural TTS endpoint.
-    Guarantees 100% microphone compatibility on iPhone Safari, Android Chrome, and Windows PC!
-    """
+    """Legacy file-upload Audio -> LLM -> TTS endpoint."""
     t0 = time.perf_counter()
     raw_bytes = await file.read()
     if not raw_bytes or len(raw_bytes) < 1200:
         return JSONResponse({"user_text": "", "reply": "", "audio_b64": ""})
 
-    user_text = await transcribe_audio_fast(raw_bytes, file.content_type or "audio/webm")
+    user_text = await transcribe_audio_fast(raw_bytes, file.content_type or "audio/webm", language)
     stt_ms = int((time.perf_counter() - t0) * 1000)
 
     cleaned_user = user_text.strip()
@@ -797,5 +820,5 @@ async def api_call_transcribe(
     language: str = Form("uz"),
 ):
     raw_bytes = await file.read()
-    text = await transcribe_audio_fast(raw_bytes, file.content_type or "audio/webm")
+    text = await transcribe_audio_fast(raw_bytes, file.content_type or "audio/webm", language)
     return {"text": text}

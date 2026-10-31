@@ -21,6 +21,7 @@ Get up and running fast with Voice Chat AI! 🔊
 - [**Detailed Install Guide**](INSTALL.md): Step-by-step installation with pip, uv, or conda.
 - [**Run with Docker**](#install-with-docker): Use Docker run or Docker Compose
 - [**Configure Settings**](#configuration): Customize AI models, voices, and characters via `.env` on startup.
+- [**Uzbek / Russian / English Live STT**](docs/STREAMING_ASR.md): Local streaming microphone recognition for `/call` and `/live-stt`, model research, deployment and evaluation.
 - [**OpenAI Enhanced**](#openai-enhanced): Use OpenAI Enhanced Mode to speak with the AI in a more human like way with emotions.
 - [**OpenAI Realtime**](#openai-realtime): Experience real-time conversations with OpenAI's WebRTC-based Realtime API.
 - [**Game & Story Modes**](#game--story-modes): Explore interactive games and immersive storytelling experiences.

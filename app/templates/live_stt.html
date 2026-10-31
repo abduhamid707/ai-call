@@ -1,123 +1,243 @@
 <!doctype html>
-<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Live Speech-to-Text</title>
+<html lang="uz">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jonli ovozdan matnga</title>
 <style>
 body{font:16px system-ui,sans-serif;background:#f6f7fc;color:#0a2937;margin:0;padding:32px}
 main{max-width:780px;margin:auto;background:white;border-radius:20px;padding:30px;box-shadow:0 8px 32px #0a293712}
-h1{margin-top:0}button{padding:12px 18px;border:0;border-radius:10px;background:#0a2937;color:white;cursor:pointer;margin-right:8px}
-button:disabled{opacity:.4;cursor:not-allowed}#agent-box{margin-top:22px;border-top:1px solid #e5e7eb;padding-top:12px}#agent-reply{white-space:pre-wrap;line-height:1.7}#text{min-height:180px;white-space:pre-wrap;line-height:1.8;font-size:19px;margin-top:20px}
-#interim{color:#6b7280}#status{color:#527481}small{display:block;margin-top:10px;color:#666}
-</style></head><body><main>
-<h1>🎙️ Jonli ovozdan matnga</h1>
+h1{margin-top:0}button,select{font:inherit;padding:12px 16px;border:1px solid #d8dfe5;border-radius:10px;margin:4px 8px 4px 0}
+button{background:#0a2937;color:white;cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}
+.controls{display:flex;align-items:end;flex-wrap:wrap;gap:12px;margin-bottom:16px}.controls label{display:flex;flex-direction:column;gap:4px}.controls .check{flex-direction:row;align-items:center;padding:12px 0}
+#agent-box{margin-top:22px;border-top:1px solid #e5e7eb;padding-top:12px}#agent-reply{white-space:pre-wrap;line-height:1.7}
+#text{min-height:180px;white-space:pre-wrap;line-height:1.8;font-size:19px;margin-top:20px}#interim{color:#6b7280}
+#status{color:#527481}small{display:block;margin-top:10px;color:#666}a{color:#527481}
+@media(max-width:520px){body{padding:12px}main{padding:20px}button{margin-bottom:8px}}
+</style>
+</head>
+<body><main>
+<a href="/call">← Qo‘ng‘iroq sahifasi</a>
+<h1>Jonli ovozdan matnga</h1>
 <p id="status" role="status">Tayyor. Mikrofonni yoqing.</p>
-<button id="start">Gapirishni boshlash</button><button id="stop" disabled>To'xtatish</button><button id="copy">Matnni nusxalash</button>
+<div class="controls">
+<label for="language">Nutq tili<select id="language"><option value="uz">O‘zbekcha</option><option value="auto">Avtomatik (UZ / RU / EN)</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+<label for="silence">Gap orasidagi pauza<select id="silence"><option value="380">380 ms</option><option value="600" selected>600 ms — tabiiy</option><option value="900">900 ms</option></select></label>
+<label class="check"><input id="agent-enabled" type="checkbox" checked>AI ovozli javob bersin</label>
+</div>
+<button id="start">Gapirishni boshlash</button><button id="stop" disabled>To‘xtatish</button><button id="copy">Matnni nusxalash</button>
 <div id="text" aria-live="polite"><span id="confirmed"></span> <span id="interim"></span></div>
-<small>Vaqtinchalik matn aniqlashtirilishi mumkin. Yakuniy matn OpenAI tasdiqlaganda saqlanadi.</small>
-<section id="agent-box"><h2>🤖 AI agent</h2><p id="agent-status">Javobni kutmoqda…</p><div id="agent-reply" aria-live="polite"></div><audio id="agent-player" preload="auto"></audio></section></main><script>
+<small>Vaqtinchalik matn nutq davomida aniqlashtiriladi. Raqamlar va muhim ma’lumotlarni yakuniy matnda tekshiring.</small>
+<section id="agent-box"><h2>AI agent</h2><p id="agent-status" role="status">Javobni kutmoqda…</p><div id="agent-reply" aria-live="polite"></div><button id="interrupt" disabled>Javobni to‘xtatish</button><audio id="agent-player" preload="auto" playsinline></audio></section>
+</main>
+<script src="/app/static/js/live_audio.js"></script>
+<script>
+'use strict';
 const $ = id => document.getElementById(id);
-let socket, stream, ctx, source, processor, isRunning=false, confirmed=[], partial=new Map(), done=new Map();
-let leftover = new Float32Array(0), nextItem = 0;
-const submitted=new Set(), playChunks=new Map();
-let nextChunk=0, activeTurn=null, playing=false, mutedForAgent=false, agentFinished=false, expectedChunks=0;
-function resetTurn(id){activeTurn=id;nextChunk=0;agentFinished=false;expectedChunks=0;mutedForAgent=true;playChunks.clear();$('agent-reply').textContent='';}
-async function playNext(){
- if(playing||!playChunks.has(nextChunk)) return;
- playing=true;mutedForAgent=true;$('agent-status').textContent='AI gapiryapti…';
- const idx=nextChunk++;const data=playChunks.get(idx);playChunks.delete(idx);
- const audio=$('agent-player');
- audio.src='data:audio/mpeg;base64,'+data;
- try{await audio.play();}catch(e){playing=false;mutedForAgent=false;$('agent-status').textContent='Ovoz avtomatik boshlanmadi: brauzer ruxsatini tekshiring.';}
-}
-$('agent-player').onended=()=>{playing=false;if(playChunks.has(nextChunk))playNext();else if(agentFinished&&nextChunk>=expectedChunks){mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';}};
+let capture = null, isRunning = false, isStopping = false, sessionVersion = 0;
+let confirmed = [], partial = new Map(), done = new Set();
+let activeTurn = null, nextChunk = 0, playing = false, agentFinished = false, expectedChunks = 0;
+let playbackFailed = false, playbackAcknowledged = false;
+const playChunks = new Map(), cancelledTurns = new Set();
 
-function render(){
-  $('confirmed').textContent = confirmed.join(' ') + (confirmed.length ? ' ' : '');
-  $('interim').textContent = [...partial.values()].join(' ');
+function render() {
+    $('confirmed').textContent = confirmed.join(' ') + (confirmed.length ? ' ' : '');
+    $('interim').textContent = [...partial.values()].join(' ');
 }
-function appendFinal(id, text){
-  if(!text || done.has(id)) return;
-  done.set(id,text);
-  partial.delete(id);
-  confirmed.push(text);
-  render();
-  if(isRunning && socket?.readyState===WebSocket.OPEN && !submitted.has(id) && text.trim()){
-    submitted.add(id);
-    socket.send(JSON.stringify({type:'agent_utterance',item_id:id,text:text.trim()}));
-  }
+function toggleControls(disabled) {
+    $('language').disabled = disabled;
+    $('silence').disabled = disabled;
+    $('agent-enabled').disabled = disabled;
 }
-function encodePCM(samples){
-  let buf=new ArrayBuffer(samples.length*2), view=new DataView(buf);
-  samples.forEach((x,i)=>view.setInt16(i*2,Math.max(-1,Math.min(1,x))*32767,true));
-  return buf;
+function cancelPlayback(notifyServer = false) {
+    if (activeTurn) {
+        cancelledTurns.add(activeTurn);
+        if (cancelledTurns.size > 512) cancelledTurns.delete(cancelledTurns.values().next().value);
+    }
+    activeTurn = null;
+    playChunks.clear();
+    playing = false;
+    const audio = $('agent-player');
+    audio.onended = null;
+    audio.onerror = null;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    $('interrupt').disabled = true;
+    if (notifyServer) capture?.send({type: 'interrupt'});
 }
-function resample(samples,from,to=24000){
-  // Linear resampling with preserved remainder across audio callbacks.
-  let all=new Float32Array(leftover.length+samples.length);
-  all.set(leftover);all.set(samples,leftover.length);
-  const step=from/to,out=[];let pos=0;
-  while(pos+1<all.length){let j=Math.floor(pos),fraction=pos-j;out.push(all[j]*(1-fraction)+all[j+1]*fraction);pos+=step}
-  const used=Math.floor(pos);leftover=all.slice(used);
-  return new Float32Array(out);
+function showAgentListening() {
+    $('interrupt').disabled = true;
+    $('agent-status').textContent = isRunning ? 'Tinglayapman…' : 'To‘xtatildi.';
 }
-async function stop(){
-  isRunning=false;
-  if(processor){processor.disconnect();processor.onaudioprocess=null;processor=null}
-  if(source){source.disconnect();source=null}
-  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
-  if(ctx){await ctx.close();ctx=null}
-  if(socket && socket.readyState===WebSocket.OPEN){
-    // Give pending audio a short chance to settle before closing.
-    await new Promise(r=>setTimeout(r,950));
-    socket.send(JSON.stringify({type:'stop'}));
-  }
-  $('start').disabled=false;$('stop').disabled=true;
-  $('status').textContent='To‘xtatildi.';
+function finishAgentPlayback() {
+    if (!activeTurn || !agentFinished || playing || playChunks.size) return;
+    if (!playbackFailed && !playbackAcknowledged && expectedChunks > 0 && nextChunk >= expectedChunks) {
+        capture?.send({type: 'agent_playback_done', turn_id: activeTurn});
+        playbackAcknowledged = true;
+    }
+    showAgentListening();
 }
-$('stop').onclick=stop;
-$('copy').onclick=async()=>{await navigator.clipboard.writeText(confirmed.join(' '));};
-$('start').onclick=async()=>{
-  $('start').disabled=true;
-  try{
-    socket=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/live-stt');
-    await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=()=>reject(Error('WebSocket ulanmadi'))});
-    socket.onmessage=e=>{
-      let m=JSON.parse(e.data),type=m.type;
-      if(type==='ready'){$('status').textContent='Tinglayapman…'}
-      else if(type==='conversation.item.input_audio_transcription.delta'){
-        let id=m.item_id||'current';if(!done.has(id)) partial.set(id,(partial.get(id)||'')+m.delta);render();
-      } else if(type==='conversation.item.input_audio_transcription.completed'){
-        appendFinal(m.item_id||'current',m.transcript);
-      } else if(type==='agent_thinking'){
-        resetTurn(m.turn_id);$('agent-status').textContent='AI javob tayyorlayapti…';
-      } else if(type==='agent_text_delta'){
-        if(m.turn_id===activeTurn)$('agent-reply').textContent+=m.delta;
-      } else if(type==='agent_audio'){
-        if(m.turn_id===activeTurn){playChunks.set(m.index,m.audio);playNext();}
-      } else if(type==='agent_done'){
-        if(m.turn_id===activeTurn){
-          agentFinished=true;expectedChunks=m.chunks||0;
-          if(!playing && playChunks.size===0 && nextChunk>=expectedChunks){
-            mutedForAgent=false;$('agent-status').textContent='Tinglayapman…';
-          }else playNext();
+async function playNext() {
+    if (playing || !activeTurn || isStopping || !isRunning) return;
+    if (!playChunks.has(nextChunk) && agentFinished) {
+        // A failed TTS chunk must not leave playback permanently waiting for a missing index.
+        const available = [...playChunks.keys()].filter(index => index >= nextChunk).sort((a, b) => a - b);
+        if (available.length) {
+            playbackFailed = true;
+            nextChunk = available[0];
+        } else {
+            if (nextChunk < expectedChunks) playbackFailed = true;
+            finishAgentPlayback();
+            return;
         }
-      } else if(type==='agent_error'){
-        mutedForAgent=false;$('agent-status').textContent=m.message;
-      } else if(type==='error'){$('status').textContent=m.message||'API xatosi';}
+    }
+    if (!playChunks.has(nextChunk)) return;
+    const turn = activeTurn;
+    const audio = $('agent-player');
+    const chunk = playChunks.get(nextChunk);
+    playChunks.delete(nextChunk++);
+    playing = true;
+    $('interrupt').disabled = false;
+    $('agent-status').textContent = 'AI gapiryapti. Gapirib javobni to‘xtatishingiz mumkin.';
+    audio.src = 'data:audio/mpeg;base64,' + chunk;
+    const complete = () => {
+        if (turn !== activeTurn) return;
+        playing = false;
+        playNext();
+        finishAgentPlayback();
     };
-    socket.onclose=()=>{if(isRunning)stop()};
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
-    ctx=new AudioContext();
-    source=ctx.createMediaStreamSource(stream);
-    processor=ctx.createScriptProcessor(2048,1,1);
-    processor.onaudioprocess=e=>{
-      if(!isRunning||mutedForAgent||socket.readyState!==WebSocket.OPEN)return;
-      if(socket.bufferedAmount>250000)return;
-      let sample=resample(e.inputBuffer.getChannelData(0),ctx.sampleRate);
-      if(sample.length)socket.send(encodePCM(sample));
+    audio.onended = complete;
+    audio.onerror = () => {
+        if (turn !== activeTurn) return;
+        playbackFailed = true;
+        $('agent-status').textContent = 'Ovoz qismini ijro qilib bo‘lmadi.';
+        complete();
     };
-    source.connect(processor);processor.connect(ctx.destination);
-    isRunning=true;$('stop').disabled=false;
-    $('status').textContent='Tinglayapman…';
-  }catch(err){$('status').textContent=err.message;await stop();}
+    try { await audio.play(); }
+    catch (_) {
+        if (turn !== activeTurn) return;
+        cancelPlayback(true);
+        $('agent-status').textContent = 'Ovoz ijrosi bloklandi. Brauzer ovoz ruxsatini tekshiring.';
+    }
+}
+function onEvent(message) {
+    const type = message.type;
+    const id = message.item_id || 'current';
+    if (type === 'input_audio_buffer.speech_started') {
+        cancelPlayback();
+        if (isRunning) $('agent-status').textContent = 'Sizni eshityapman…';
+    } else if (type === 'transcript.partial' || type === 'conversation.item.input_audio_transcription.delta') {
+        if (!done.has(id)) {
+            const text = type === 'transcript.partial' ? (message.transcript || message.text || '') : (partial.get(id) || '') + (message.delta || '');
+            partial.set(id, text);
+            render();
+        }
+    } else if (type === 'conversation.item.input_audio_transcription.completed') {
+        if (done.has(id)) return;
+        done.add(id);
+        if (done.size > 512) done.delete(done.values().next().value);
+        partial.delete(id);
+        const text = (message.transcript || '').trim();
+        if (text) confirmed.push(text);
+        render();
+        // The server submits its own final transcript. No client echo/duplicate AI request.
+    } else if (type === 'conversation.item.input_audio_transcription.failed') {
+        partial.delete(id);
+        render();
+        $('status').textContent = message.message || 'Bu gapni aniqlab bo‘lmadi. Iltimos, qaytaring.';
+    } else if (type === 'agent_thinking') {
+        if (!isRunning || isStopping || cancelledTurns.has(message.turn_id)) return;
+        cancelPlayback();
+        activeTurn = message.turn_id;
+        nextChunk = 0;
+        agentFinished = false;
+        expectedChunks = 0;
+        playbackFailed = false;
+        playbackAcknowledged = false;
+        $('agent-reply').textContent = '';
+        $('agent-status').textContent = 'AI javob tayyorlayapti…';
+        $('interrupt').disabled = false;
+    } else if (type === 'agent_text_delta') {
+        if (message.turn_id === activeTurn) $('agent-reply').textContent += message.delta || '';
+    } else if (type === 'agent_audio') {
+        if (message.turn_id === activeTurn && !cancelledTurns.has(message.turn_id) && message.index >= nextChunk) {
+            playChunks.set(message.index, message.audio);
+            playNext();
+        }
+    } else if (type === 'agent_done') {
+        if (message.turn_id === activeTurn) {
+            agentFinished = true;
+            expectedChunks = message.chunks || 0;
+            playNext();
+        }
+    } else if (type === 'agent_cancelled' || type === 'agent_interrupted') {
+        if (!message.turn_id || message.turn_id === activeTurn) { cancelPlayback(); showAgentListening(); }
+    } else if (type === 'agent_error') {
+        if (!message.turn_id || message.turn_id === activeTurn || (!activeTurn && !cancelledTurns.has(message.turn_id))) {
+            cancelPlayback();
+            $('agent-status').textContent = message.message || 'AI javobida xato.';
+        }
+    }
+}
+async function stop(message = 'To‘xtatildi. Yakuniy matn saqlandi.') {
+    if (isStopping) return;
+    isStopping = true;
+    isRunning = false;
+    $('stop').disabled = true;
+    $('status').textContent = 'Oxirgi gap yakunlanmoqda…';
+    cancelPlayback(true);
+    const previous = capture;
+    capture = null;
+    const flushed = previous ? await previous.stop() : false;
+    sessionVersion++;
+    isStopping = false;
+    toggleControls(false);
+    $('start').disabled = false;
+    $('status').textContent = previous?.error ? previous.error.message : (flushed ? message : 'To‘xtatildi. Oxirgi matn to‘liq kelganini tekshiring.');
+    showAgentListening();
+}
+$('stop').onclick = () => stop();
+$('interrupt').onclick = () => { cancelPlayback(true); showAgentListening(); };
+$('copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(confirmed.join(' ')); $('status').textContent = 'Matn nusxalandi.'; }
+    catch (_) { $('status').textContent = 'Nusxalashga ruxsat berilmadi. Matnni belgilang va nusxalang.'; }
 };
+$('agent-enabled').onchange = () => { $('agent-box').hidden = !$('agent-enabled').checked; };
+$('start').onclick = async () => {
+    if (isRunning || isStopping) return;
+    $('start').disabled = true;
+    toggleControls(true);
+    partial.clear();
+    done.clear();
+    cancelledTurns.clear();
+    render();
+    $('status').textContent = 'Nutq modeli va mikrofon ulanmoqda…';
+    const version = ++sessionVersion;
+    const nextCapture = new LiveAudio.MicrophoneStream({
+        language: $('language').value,
+        silenceMs: Number($('silence').value),
+        agent: $('agent-enabled').checked,
+        onEvent: message => { if (version === sessionVersion) onEvent(message); },
+        onError: error => {
+            if (version !== sessionVersion) return;
+            $('status').textContent = error.message;
+            if (!isStopping) stop(error.message);
+        },
+    });
+    capture = nextCapture;
+    try {
+        const ready = await nextCapture.start();
+        if (version !== sessionVersion) { await nextCapture.stop(); return; }
+        isRunning = true;
+        $('stop').disabled = false;
+        const provider = ['local', 'faster_whisper'].includes(ready.provider) ? 'Mahalliy STT' : 'OpenAI STT';
+        $('status').textContent = provider + ' ulandi. Tinglayapman…';
+        showAgentListening();
+    } catch (error) {
+        if (version !== sessionVersion) return;
+        await stop(error.message);
+        $('status').textContent = error.message;
+    }
+};
+window.addEventListener('pagehide', () => capture?.release());
 </script></body></html>

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ElevenLabs AI Call Mode — 0.2s WebRTC Super-Realtime</title>
+    <title>AI Call — Jonli suhbat</title>
     <link rel="icon" href="/app/static/favicon.ico" type="image/x-icon">
     <style>
         :root {
@@ -416,7 +416,7 @@
     <header>
         <div class="brand">
             <span>🎙️ ElevenLabs AI Call Studio</span>
-            <span class="brand-badge">⚡ 0.2s WEBRTC REALTIME + INSTANT BARGE-IN</span>
+            <span class="brand-badge">JONLI NUTQ · O‘ZBEK / RUS / INGLIZ</span>
         </div>
         <ul class="nav-links">
             <li><a href="/call" class="active">🔥 ElevenLabs Call Mode</a></li>
@@ -437,8 +437,8 @@
             <div class="field-group">
                 <label for="engineSelect">🚀 Aloqa Texnologiyasi (Call Engine):</label>
                 <select id="engineSelect">
-                    <option value="edge_turbo" selected>🇺🇿 Sardor/Madina Neural TTS (0.2s Super-Turbo, $1=4000 daqiqa ⚡)</option>
-                    <option value="webrtc">⚡ WebRTC Super-Realtime (OpenAI Audio-to-Audio)</option>
+                    <option value="edge_turbo" selected>Jonli STT + Neural TTS</option>
+                    <option value="webrtc">WebRTC (OpenAI Audio-to-Audio)</option>
                 </select>
             </div>
 
@@ -446,6 +446,7 @@
                 <label for="langSelect">🌍 Suhbat Tili:</label>
                 <select id="langSelect">
                     <option value="uz-UZ" selected>🇺🇿 O'zbek tili (uz-UZ)</option>
+                    <option value="auto">Avtomatik — o‘zbek, rus, ingliz</option>
                     <option value="ru-RU">🇷🇺 Русский язык (ru-RU)</option>
                     <option value="en-US">🇺🇸 English (en-US)</option>
                     <option value="tr-TR">🇹🇷 Türkçe (tr-TR)</option>
@@ -453,7 +454,7 @@
             </div>
 
             <div class="field-group" id="rtcVoiceGroup" style="display: none;">
-                <label for="rtcVoiceSelect">🗣️ WebRTC Realtime Ovozi (0.2s):</label>
+                <label for="rtcVoiceSelect">🗣️ WebRTC Realtime Ovozi:</label>
                 <select id="rtcVoiceSelect">
                     <option value="ash" selected>Ash — Erkak (Aniq va Tabiiy)</option>
                     <option value="marin">Marin — Ayol (Tavsiya etiladi)</option>
@@ -466,10 +467,10 @@
             </div>
 
             <div class="field-group" id="edgeVoiceGroup">
-                <label for="voiceSelect">🗣️ Neural Edge-TTS Ovozi (100% Bepul):</label>
+                <label for="voiceSelect">🗣️ Neural Edge-TTS Ovozi:</label>
                 <select id="voiceSelect">
                     {% for v in voices %}
-                    <option value="{{ v.id }}">{{ v.name }}</option>
+                    <option value="{{ v.id }}" data-lang="{{ v.lang }}">{{ v.name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -494,25 +495,25 @@
             <div class="field-group">
                 <label for="silenceMsSelect">⏱️ Gapni bo'lish va sezish (VAD):</label>
                 <select id="silenceMsSelect">
-                    <option value="250" selected>250 ms (Bir zumda sezadi ⚡)</option>
-                    <option value="380">380 ms (Tabiiy)</option>
-                    <option value="600">600 ms (Sekinroq)</option>
+                    <option value="380">380 ms (Qisqa pauza)</option>
+                    <option value="600" selected>600 ms (Tabiiy)</option>
+                    <option value="900">900 ms (Uzunroq pauza)</option>
                 </select>
             </div>
 
             <div class="metrics-bar">
-                <span id="modeBadge">Universal AI Neural Turbo</span>
-                <span id="latencyBadge">Javob tezligi: ~150 ms ⚡</span>
+                <span id="modeBadge">Jonli nutqni aniqlash</span>
+                <span id="latencyBadge">Kechikish suhbatda o‘lchanadi</span>
             </div>
 
             <!-- Mobile Wi-Fi + HTTPS QR Card -->
             <div style="margin-top: 8px; padding: 12px; border-radius: 16px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.28); text-align: center;">
                 <div style="font-size: 0.8rem; font-weight: 700; color: #34d399; margin-bottom: 6px;">
-                    📱 Telefonda Ochish (Mikrofon 100% ishlaydi)
+                    📱 Telefonda ochish (HTTPS)
                 </div>
                 <img id="qrCodeImg" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=https://scoop-shakespeare-tier-legs.trycloudflare.com/call" alt="QR Code" style="width: 130px; height: 130px; border-radius: 10px; background: white; padding: 6px; margin: 4px auto; display: block;" />
                 <div style="font-size: 0.72rem; color: #cbd5e1; margin-top: 6px; word-break: break-all;">
-                    <b>HTTPS (Tavsiya — Mic 100%):</b><br/>
+                    <b>HTTPS (mikrofon uchun):</b><br/>
                     <a id="httpsMobileLink" href="https://scoop-shakespeare-tier-legs.trycloudflare.com/call" target="_blank" style="color: #38bdf8; text-decoration: underline;">https://scoop-shakespeare-tier-legs.trycloudflare.com/call</a>
                 </div>
                 <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 4px;">
@@ -576,6 +577,7 @@
         </aside>
     </div>
 
+    <script src="/app/static/js/live_audio.js"></script>
     <script>
         const callToggleBtn = document.getElementById('callToggleBtn');
         const interruptBtn = document.getElementById('interruptBtn');
@@ -604,6 +606,34 @@
         const rtcModelSelect = document.getElementById('rtcModelSelect');
         const silenceMsSelect = document.getElementById('silenceMsSelect');
 
+        const preferredVoices = new Map();
+        function supportedVoiceLanguage(value) {
+            const code = String(value || '').toLowerCase().split('-')[0];
+            return ['uz', 'ru', 'en', 'tr'].includes(code) ? code : null;
+        }
+        function selectVoiceForLanguage(language) {
+            const code = supportedVoiceLanguage(language);
+            if (!code) return voiceSelect.value;
+            const options = Array.from(voiceSelect.options || []);
+            const matches = option => supportedVoiceLanguage(option.dataset?.lang || option.value) === code;
+            const current = options.find(option => option.value === voiceSelect.value);
+            if (current && matches(current)) {
+                preferredVoices.set(code, current.value);
+                return current.value;
+            }
+            const preferred = options.find(option => option.value === preferredVoices.get(code) && matches(option));
+            const voice = preferred || options.find(matches);
+            if (voice) voiceSelect.value = voice.value;
+            return voiceSelect.value;
+        }
+        voiceSelect.addEventListener('change', () => {
+            const option = Array.from(voiceSelect.options || []).find(item => item.value === voiceSelect.value);
+            const code = supportedVoiceLanguage(option?.dataset?.lang || voiceSelect.value);
+            if (code) preferredVoices.set(code, voiceSelect.value);
+        });
+        langSelect.addEventListener('change', () => selectVoiceForLanguage(langSelect.value));
+        selectVoiceForLanguage(langSelect.value);
+
         let isCallActive = false;
         let currentState = 'idle'; // idle | listening | thinking | speaking
         let conversationHistory = [];
@@ -620,14 +650,9 @@
         document.body.appendChild(rtcAudioPlayer);
         let speechStopTimestamp = 0;
 
-        // Edge Turbo fallback state
+        // Browser call playback and request cancellation state
         let currentAudio = null;
-        let recognition = null;
-        let silenceTimer = null;
-        let accumulatedTranscript = '';
-        let latestInterim = '';
         let turnAbortController = null;
-        let aiSpeechStartedAt = 0;
 
         // Web Audio API Analyser for 60FPS 3D Orb
         let audioCtx = null;
@@ -641,7 +666,7 @@
             rtcVoiceGroup.style.display = isWebRTC ? 'flex' : 'none';
             edgeVoiceGroup.style.display = isWebRTC ? 'none' : 'flex';
             modeBadge.textContent = isWebRTC ? 'WebRTC UDP Stream' : 'Edge Neural Turbo';
-            latencyBadge.textContent = isWebRTC ? 'Kechikish: ~200 ms' : 'Kechikish: ~1.2 s';
+            latencyBadge.textContent = 'Kechikish suhbatda o‘lchanadi';
             if (isCallActive) {
                 stopCall();
             }
@@ -658,13 +683,13 @@
             } else if (state === 'listening') {
                 statusText.textContent = "Sizni eshitmoqda... Gapiring!";
                 orbTitle.textContent = "ESHITMOQDA";
-                orbSub.textContent = "0ms Avto Gapni Bo'lish";
+                orbSub.textContent = "Bemalol gapiravering";
                 interruptBtn.style.display = 'none';
             } else if (state === 'thinking') {
                 statusText.textContent = "Javob berilmoqda...";
                 orbTitle.textContent = "STREAMING...";
-                orbSub.textContent = "WebRTC Realtime";
-                interruptBtn.style.display = 'none';
+                orbSub.textContent = "Sizni eshitish davom etmoqda";
+                interruptBtn.style.display = 'inline-flex';
             } else if (state === 'speaking') {
                 statusText.textContent = "AI gapirmoqda (Gapirsangiz darhol to'xtaydi!)";
                 orbTitle.textContent = "AI GAPIRMOQDA";
@@ -686,12 +711,14 @@
         }
 
         clearChatBtn.addEventListener('click', () => {
+            cancelEdgeTurn();
+            pendingLiveHistory = null;
             conversationHistory = [];
             chatLog.innerHTML = '<div class="msg system">Muloqot tarixi tozalandi.</div>';
         });
 
         // =====================================================================
-        // MODE 1: WEBRTC SUPER-REALTIME (~200ms latency, Native 0ms Barge-In)
+        // MODE 1: OpenAI WebRTC audio conversation
         // =====================================================================
         async function buildWebRTCInstructions() {
             const charName = charSelect.value;
@@ -708,7 +735,8 @@
                 'uz-UZ': "MUHIM QOIDA: Foydalanuvchi bilan faqat SOF, RAVON O'ZBEK TILIDA gaplashing! Javoblaringizni juda qisqa (1 ta gap, 5-12 so'z), tez, samimiy va jonli odamdek ayting. Hech qachon uzun ma'ruza o'qimang!",
                 'ru-RU': "ВАЖНО: Разговаривай на чистом русском языке, очень кратко (1 предложение, 5-12 слов), живо и естественно, как по телефону!",
                 'en-US': "IMPORTANT: Speak in natural English, very concisely (1 short sentence, 5-12 words) like a live phone call!",
-                'tr-TR': "ÖNEMLİ: Doğal Türkçe konuşun, çok kısa (1 cümle, 5-12 kelime) ve samimi cevap verin!"
+                'tr-TR': "ÖNEMLİ: Doğal Türkçe konuşun, çok kısa (1 cümle, 5-12 kelime) ve samimi cevap verin!",
+                'auto': "Answer in the language the caller uses. Keep Uzbek, Russian and English naturally without translating their words."
             }[langSelect.value] || "";
 
             return `${basePrompt}\n\n${langRules}`.trim();
@@ -801,7 +829,8 @@
                         'uz-UZ': "Foydalanuvchiga 4-5 so'z bilan qisqa o'zbekcha salom berib, eshitayotganingizni ayting.",
                         'ru-RU': "Кратко (4-5 слов) поздоровайся по-русски и скажи, что слушаешь.",
                         'en-US': "Greet the user in 4-5 words and say you are listening.",
-                        'tr-TR': "Kullanıcıyı 4-5 kelimeyle Türkçe selamla ve dinlediğini söyle."
+                        'tr-TR': "Kullanıcıyı 4-5 kelimeyle Türkçe selamla ve dinlediğini söyle.",
+                        'auto': "Greet briefly in Uzbek and listen for the caller's language."
                     }[langSelect.value];
 
                     dataChannel.send(JSON.stringify({
@@ -818,7 +847,7 @@
                         const t = msg.type;
 
                         if (t === "input_audio_buffer.speech_started") {
-                            // USER STARTED SPEAKING -> INSTANT 0ms BARGE-IN!
+                            // The upstream VAD detected speech and interrupted the response.
                             setUIState('listening', "🎙️ Siz gapiryapsiz (AI darhol to'xtadi)...");
                             streamingAiTranscript = "";
                         } else if (t === "input_audio_buffer.speech_stopped") {
@@ -901,568 +930,239 @@
             }
         }
 
-        // =====================================================================
-        // MODE 2: EDGE NEURAL TTS 0.2s SUPER-TURBO (Sardor / Madina)
-        // Combines:
-        //  1) 100ms Speculative Interim Pre-Execution (starts LLM+TTS while user finishes speaking)
-        //  2) Persistent IPv4 Edge-TTS WebSocket + gpt-5.4-nano (reasoning_effort=none)
-        //  3) 0.17s Pre-Cached Reflex Voice Bridge ('Albatta,' / 'Tushunarli,')
-        //  4) Non-stop Continuous Recognition (0ms Barge-In without restarting mic!)
-        // =====================================================================
-        let reflexPack = { q_audio_b64: null, q_text: "Albatta,", s_audio_b64: null, s_text: "Tushunarli," };
-        let speculativeCache = { text: "", promise: null, abortController: null, startedAt: 0 };
-        let prefetchTimer = null;
-        let consumedResultIndex = 0;
-        let consumedFinalLength = 0;
-
-        async function loadReflexPack() {
-            try {
-                const params = new URLSearchParams({
-                    voice: voiceSelect.value || "uz-UZ-SardorNeural",
-                    speed: "1.15",
-                    language: langSelect.value || "uz-UZ"
-                });
-                const res = await fetch(`/api/call/reflex_pack?${params.toString()}`);
-                if (res.ok) {
-                    reflexPack = await res.json();
-                }
-            } catch (e) {
-                console.warn("Reflex pack preload warning:", e);
-            }
-        }
-        loadReflexPack();
-        voiceSelect.addEventListener('change', loadReflexPack);
-        langSelect.addEventListener('change', loadReflexPack);
-
-        function isQuestionText(txt) {
-            const lower = (txt || "").toLowerCase();
-            return (
-                lower.includes("?") ||
-                /\b(bormi|qancha|qanday|qayerda|qachon|nechchi|necha|kim|nima|mumkinmi|bo'ladimi|kelsam|olasizmi|berasizmi)\b/.test(lower)
-            );
-        }
+        // MODE 2: one continuous microphone stream; only final transcripts start an AI turn.
+        let liveCapture = null;
+        let callGeneration = 0;
+        let edgeTurnVersion = 0;
+        let resolveCurrentAudio = null;
+        let isStartingCall = false;
+        let isStoppingCall = false;
+        let pendingLiveHistory = null;
+        const liveFinalIds = new Set();
+        const livePartials = new Map();
+        const speechEndTimes = new Map();
 
         function stopCurrentAudio() {
             if (currentAudio) {
-                try {
-                    currentAudio.onended = null;
-                    currentAudio.pause();
-                    currentAudio.src = "";
-                } catch (e) {}
+                currentAudio.onended = null;
+                currentAudio.onerror = null;
+                currentAudio.onplaying = null;
+                currentAudio.pause();
+                currentAudio.src = '';
                 currentAudio = null;
             }
+            if (resolveCurrentAudio) {
+                resolveCurrentAudio(false);
+                resolveCurrentAudio = null;
+            }
         }
 
-        function playAudioBase64Promise(b64Data, textLabel, keepSpeakingStateAfter = false) {
-            return new Promise(async (resolve) => {
-                stopCurrentAudio();
-                aiSpeechStartedAt = performance.now();
-                setUIState('speaking', textLabel);
+        function cancelEdgeTurn() {
+            edgeTurnVersion++;
+            if (turnAbortController) turnAbortController.abort();
+            turnAbortController = null;
+            stopCurrentAudio();
+        }
 
-                const audioUrl = "data:audio/mpeg;base64," + b64Data;
-                const audio = new Audio(audioUrl);
+        function playAudioBase64Promise(b64Data, textLabel, metrics = null) {
+            stopCurrentAudio();
+            return new Promise(resolve => {
+                resolveCurrentAudio = resolve;
+                const audio = new Audio('data:audio/mpeg;base64,' + b64Data);
                 currentAudio = audio;
-
+                audio.playsInline = true;
+                setUIState('speaking', textLabel);
+                const finish = completed => {
+                    if (currentAudio !== audio) return;
+                    currentAudio = null;
+                    resolveCurrentAudio = null;
+                    if (isCallActive) setUIState('listening', 'Eshitaman, gapiravering…');
+                    resolve(completed);
+                };
+                audio.onended = () => finish(true);
+                audio.onerror = () => {
+                    appendMessage('system', 'AI ovozini ijro qilib bo‘lmadi. Matn javobi suhbatda saqlandi.');
+                    finish(false);
+                };
+                audio.onplaying = () => {
+                    if (currentAudio !== audio || !metrics) return;
+                    const now = performance.now();
+                    const replyMs = Math.round(now - metrics.finalAt);
+                    const parts = [`Matn → ovoz: ${replyMs} ms`];
+                    if (metrics.speechEndAt) parts.push(`Pauza sezilishi → ovoz: ${Math.round(now - metrics.speechEndAt)} ms`);
+                    latencyBadge.textContent = parts.join(' · ');
+                    audio.onplaying = null;
+                };
                 if (audioCtx) {
                     try {
-                        if (audioCtx.state === 'suspended') await audioCtx.resume();
-                        const srcNode = audioCtx.createMediaElementSource(audio);
+                        const source = audioCtx.createMediaElementSource(audio);
                         ttsAnalyser = audioCtx.createAnalyser();
                         ttsAnalyser.fftSize = 128;
-                        srcNode.connect(ttsAnalyser);
+                        source.connect(ttsAnalyser);
                         ttsAnalyser.connect(audioCtx.destination);
                         ttsDataArray = new Uint8Array(ttsAnalyser.frequencyBinCount);
-                    } catch (e) {}
+                    } catch (_) {}
                 }
-
-                audio.onended = () => {
-                    if (currentAudio === audio) {
-                        currentAudio = null;
-                        if (!keepSpeakingStateAfter && isCallActive && currentState === 'speaking') {
-                            setUIState('listening', "Eshitaman, gapiravering...");
-                        }
-                    }
-                    resolve();
-                };
-
-                audio.onerror = () => {
-                    if (currentAudio === audio) currentAudio = null;
-                    resolve();
-                };
-
-                try {
-                    await audio.play();
-                } catch (err) {
-                    if (isCallActive && !keepSpeakingStateAfter) setUIState('listening');
-                    resolve();
-                }
+                audio.play().catch(() => {
+                    appendMessage('system', 'Ovozni ijro etish uchun brauzer ruxsatini tekshiring.');
+                    finish(false);
+                });
             });
         }
 
-        async function playAudioBase64(b64Data, textLabel) {
-            await playAudioBase64Promise(b64Data, textLabel, false);
-        }
-
-        function startSpeculativeFetch(candidateText, usedBridgeHint = true) {
-            const norm = (candidateText || "").trim();
-            if (norm.length < 2) return null;
-            if (speculativeCache.text === norm && speculativeCache.promise) {
-                return speculativeCache.promise;
-            }
-            if (speculativeCache.abortController) {
-                try { speculativeCache.abortController.abort(); } catch (e) {}
-            }
-            const ac = new AbortController();
-            const p = fetch('/api/call/voice_turn', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                signal: ac.signal,
-                body: JSON.stringify({
-                    message: norm,
-                    character: charSelect.value,
-                    history: conversationHistory,
-                    language: langSelect.value,
-                    provider: 'free_ai',
-                    model: 'gpt-5.4-nano',
-                    voice: voiceSelect.value,
-                    speed: 1.15,
-                    used_bridge: usedBridgeHint
-                })
-            }).then(r => {
-                if (!r.ok) throw new Error('Turn failed');
-                return r.json();
-            });
-
-            speculativeCache = {
-                text: norm,
-                promise: p,
-                abortController: ac,
-                startedAt: performance.now()
-            };
-            return p;
-        }
-
-        async function handleEdgeTurboTurn(userText) {
+        async function handleEdgeTurboTurn(userText, options = {}) {
             const cleaned = (userText || '').trim();
             if (!cleaned) return;
-
-            if (silenceTimer) {
-                clearTimeout(silenceTimer);
-                silenceTimer = null;
-            }
-            if (prefetchTimer) {
-                clearTimeout(prefetchTimer);
-                prefetchTimer = null;
-            }
-            accumulatedTranscript = '';
-            latestInterim = '';
-
-            stopCurrentAudio();
-            appendMessage('user', cleaned);
-            const turnCommitTime = performance.now();
-            setUIState('thinking', `Siz: "${cleaned}"`);
-
-            const fetchPromise = startSpeculativeFetch(cleaned, false);
-            const activeAbort = speculativeCache.abortController;
-            turnAbortController = activeAbort;
-
+            cancelEdgeTurn();
+            const version = edgeTurnVersion;
+            const generation = callGeneration;
+            const requestHistory = options.history || conversationHistory.slice(-14);
+            if (options.display !== false) appendMessage('user', cleaned);
+            if (options.record !== false) conversationHistory.push({role: 'user', content: cleaned});
+            conversationHistory = conversationHistory.slice(-30);
+            const finalAt = performance.now();
+            const ac = new AbortController();
+            turnAbortController = ac;
+            const detectedLanguage = supportedVoiceLanguage(options.detectedLanguage);
+            const turnLanguage = langSelect.value === 'auto' && detectedLanguage ? detectedLanguage : langSelect.value;
+            const turnVoice = selectVoiceForLanguage(turnLanguage);
+            setUIState('thinking', `Siz: “${options.displayText || cleaned}”`);
             try {
-                const data = await fetchPromise;
-                speculativeCache = { text: "", promise: null, abortController: null, startedAt: 0 };
-
-                const reply = data.reply || "Eshitaman, davom eting.";
-                const firstAudioMs = Math.round(performance.now() - turnCommitTime);
-                latencyBadge.textContent = `Javob tezligi: ${firstAudioMs} ms ⚡`;
-                conversationHistory.push({ role: 'user', content: cleaned });
-                conversationHistory.push({ role: 'assistant', content: reply });
-                appendMessage('ai', reply);
-                if (data.audio_b64) {
-                    await playAudioBase64Promise(data.audio_b64, reply, false);
-                } else if (isCallActive) {
-                    setUIState('listening');
-                }
-            } catch (err) {
-                if (err.name === 'AbortError') return;
-                if (isCallActive) setUIState('listening');
-            }
-        }
-
-        // Universal Hardware WebAudio VAD + 180ms Pre-Roll + MediaRecorder -> /api/call/voice_turn_audio
-        let vadInterval = null;
-        let activeRecorder = null;
-        let recordedChunks = [];
-        let isRecordingUtterance = false;
-        let speechStartTime = 0;
-        let lastVoiceActivityTime = 0;
-        let voiceConsecutiveFrames = 0;
-        let totalVoicedFrames = 0;
-        let aiSpeechEndedAt = 0;
-        let delayedMicDest = null;
-
-        function getSupportedAudioMime() {
-            if (typeof MediaRecorder === 'undefined') return '';
-            const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
-            for (const t of types) {
-                if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t;
-            }
-            return '';
-        }
-
-        async function handleEdgeAudioBlobTurn(audioBlob) {
-            if (!audioBlob || audioBlob.size < 1200 || !isCallActive) return;
-
-            if (turnAbortController) {
-                try { turnAbortController.abort(); } catch (e) {}
-            }
-            turnAbortController = new AbortController();
-
-            const turnCommitTime = performance.now();
-            setUIState('thinking', "⚡ Javob berilmoqda...");
-
-            try {
-                const formData = new FormData();
-                const ext = (audioBlob.type || '').includes('mp4') ? 'mp4' : 'webm';
-                formData.append('file', audioBlob, `speech.${ext}`);
-                formData.append('character', charSelect.value);
-                formData.append('language', langSelect.value);
-                formData.append('voice', voiceSelect.value);
-                formData.append('speed', '1.15');
-                formData.append('used_bridge', 'false');
-                formData.append('history_json', JSON.stringify(conversationHistory.slice(-4)));
-
-                const res = await fetch('/api/call/voice_turn_audio', {
+                const response = await fetch('/api/call/voice_turn', {
                     method: 'POST',
-                    signal: turnAbortController.signal,
-                    body: formData
+                    headers: {'Content-Type': 'application/json'},
+                    signal: ac.signal,
+                    body: JSON.stringify({
+                        message: cleaned, character: charSelect.value, history: requestHistory,
+                        language: turnLanguage, provider: 'free_ai', model: 'gpt-5.4-nano',
+                        voice: turnVoice, speed: 1.15, used_bridge: false,
+                        needs_confirmation: Boolean(options.needsConfirmation),
+                    }),
                 });
-
-                if (!res.ok) throw new Error('Audio turn failed');
-                const data = await res.json();
-
-                const userText = (data.user_text || '').trim();
+                if (!response.ok) throw new Error('AI javobini olishda xato. Qayta gapiring.');
+                const data = await response.json();
+                if (version !== edgeTurnVersion || generation !== callGeneration || ac.signal.aborted) return;
                 const reply = (data.reply || '').trim();
-
-                if (!userText || !reply) {
-                    if (isCallActive) setUIState('listening', "Eshitaman, gapiravering...");
-                    return;
-                }
-
-                appendMessage('user', userText);
-
-                const firstAudioMs = Math.round(performance.now() - turnCommitTime);
-                latencyBadge.textContent = `Javob tezligi: ${firstAudioMs} ms ⚡`;
-                conversationHistory.push({ role: 'user', content: userText });
-                conversationHistory.push({ role: 'assistant', content: reply });
+                if (!reply) throw new Error('AI bo‘sh javob qaytardi. Qayta gapiring.');
                 appendMessage('ai', reply);
                 if (data.audio_b64) {
-                    await playAudioBase64Promise(data.audio_b64, reply, false);
-                } else if (isCallActive) {
-                    setUIState('listening', "Eshitaman, gapiravering...");
+                    const heard = await playAudioBase64Promise(data.audio_b64, reply, {finalAt, speechEndAt: options.speechEndAt});
+                    if (version !== edgeTurnVersion || generation !== callGeneration) return;
+                    if (heard) conversationHistory.push({role: 'assistant', content: reply});
+                } else {
+                    conversationHistory.push({role: 'assistant', content: reply});
+                    if (isCallActive) setUIState('listening', 'Eshitaman, gapiravering…');
                 }
-            } catch (err) {
-                if (err.name === 'AbortError') return;
-                if (isCallActive) setUIState('listening', "Eshitaman, gapiravering...");
+            } catch (error) {
+                if (ac.signal.aborted || version !== edgeTurnVersion || generation !== callGeneration) return;
+                appendMessage('system', error.message);
+                if (isCallActive) setUIState('listening', 'Eshitaman, gapiravering…');
+            } finally {
+                if (turnAbortController === ac) turnAbortController = null;
             }
         }
 
-        function startRecordingUtterance() {
-            if (isRecordingUtterance || !delayedMicDest) return;
-            try {
-                recordedChunks = [];
-                totalVoicedFrames = 3;
-                const mime = getSupportedAudioMime();
-                activeRecorder = mime
-                    ? new MediaRecorder(delayedMicDest.stream, { mimeType: mime })
-                    : new MediaRecorder(delayedMicDest.stream);
-
-                activeRecorder.ondataavailable = (e) => {
-                    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
-                };
-
-                activeRecorder.onstop = () => {
-                    const dur = performance.now() - speechStartTime;
-                    const voicedCount = totalVoicedFrames;
-                    const blob = new Blob(recordedChunks, { type: activeRecorder ? activeRecorder.mimeType : 'audio/webm' });
-                    recordedChunks = [];
-                    isRecordingUtterance = false;
-                    totalVoicedFrames = 0;
-                    // Only send if user actually spoke (at least 9 voiced frames ~315ms and >= 400ms duration)
-                    if (dur >= 400 && voicedCount >= 9 && blob.size > 1200 && isCallActive) {
-                        handleEdgeAudioBlobTurn(blob);
-                    } else if (isCallActive && currentState === 'listening') {
-                        liveSubtitle.textContent = "Eshitaman, savolingizni ayting...";
-                    }
-                };
-
-                activeRecorder.start(80);
-                isRecordingUtterance = true;
-                speechStartTime = performance.now();
-                lastVoiceActivityTime = performance.now();
-                liveSubtitle.textContent = "🎙️ Siz gapiryapsiz...";
-            } catch (e) {
-                console.warn("Recorder start error:", e);
-                isRecordingUtterance = false;
-            }
-        }
-
-        function stopRecordingUtterance(cancelOnly = false) {
-            if (!isRecordingUtterance || !activeRecorder) return;
-            try {
-                if (cancelOnly) {
-                    activeRecorder.onstop = null;
-                    recordedChunks = [];
-                    isRecordingUtterance = false;
+        function handleLiveEvent(message) {
+            const id = message.item_id || 'current';
+            if (message.type === 'input_audio_buffer.speech_started') {
+                if (!isCallActive) return;
+                cancelEdgeTurn();
+                setUIState('listening', 'Siz gapiryapsiz…');
+            } else if (message.type === 'input_audio_buffer.speech_stopped') {
+                speechEndTimes.set(id, performance.now());
+            } else if (message.type === 'transcript.partial' || message.type === 'conversation.item.input_audio_transcription.delta') {
+                if (liveFinalIds.has(id)) return;
+                const text = message.type === 'transcript.partial'
+                    ? (message.transcript || message.text || '')
+                    : (livePartials.get(id) || '') + (message.delta || '');
+                livePartials.set(id, text);
+                if (isCallActive && text.trim()) liveSubtitle.textContent = 'Siz: ' + text.trim() + ' …';
+            } else if (message.type === 'conversation.item.input_audio_transcription.completed') {
+                if (liveFinalIds.has(id)) return;
+                liveFinalIds.add(id);
+                if (liveFinalIds.size > 512) liveFinalIds.delete(liveFinalIds.values().next().value);
+                livePartials.delete(id);
+                const text = (message.transcript || '').trim();
+                const agentText = (message.agent_text || text).trim();
+                const speechEndAt = speechEndTimes.get(id);
+                speechEndTimes.delete(id);
+                if (!text && !agentText) return;
+                if (!pendingLiveHistory) pendingLiveHistory = conversationHistory.slice(-14);
+                if (text) {
+                    appendMessage('user', text);
+                    conversationHistory.push({role: 'user', content: text});
                 }
-                if (activeRecorder.state !== 'inactive') {
-                    activeRecorder.stop();
-                }
-            } catch (e) {
-                isRecordingUtterance = false;
-            }
-        }
-
-        function startHardwareVoiceVAD() {
-            if (vadInterval) clearInterval(vadInterval);
-            const timeDomainBuf = new Uint8Array(128);
-            voiceConsecutiveFrames = 0;
-
-            vadInterval = setInterval(() => {
-                if (!isCallActive || engineSelect.value !== 'edge_turbo' || !micAnalyser) return;
-
-                micAnalyser.getByteTimeDomainData(timeDomainBuf);
-                let sumSq = 0;
-                for (let i = 0; i < timeDomainBuf.length; i++) {
-                    const norm = (timeDomainBuf[i] - 128) / 128.0;
-                    sumSq += norm * norm;
-                }
-                const rms = Math.sqrt(sumSq / timeDomainBuf.length);
-                const now = performance.now();
-
-                // 1) If AI is speaking -> Check for intentional user Barge-In (gapni bo'lish)
-                if (currentState === 'speaking') {
-                    aiSpeechEndedAt = now;
-                    const msSinceAiStart = now - aiSpeechStartedAt;
-                    if (msSinceAiStart > 500 && rms > 0.085) {
-                        voiceConsecutiveFrames++;
-                        if (voiceConsecutiveFrames >= 5) {
-                            if (turnAbortController) {
-                                try { turnAbortController.abort(); } catch (e) {}
-                            }
-                            stopCurrentAudio();
-                            setUIState('listening', "🎙️ Gapni bo'ldingiz — eshityapman!");
-                            voiceConsecutiveFrames = 0;
-                            startRecordingUtterance();
-                        }
-                    } else {
-                        voiceConsecutiveFrames = 0;
-                    }
-                    return;
-                }
-
-                // Ignore room echo/reverb for 450ms right after AI stops speaking
-                if (now - aiSpeechEndedAt < 450) {
-                    voiceConsecutiveFrames = 0;
-                    return;
-                }
-
-                // 2) If Listening -> Detect real human speech (ignore quiet room noise < 0.036)
-                if (currentState === 'listening') {
-                    if (rms > 0.036) {
-                        voiceConsecutiveFrames++;
-                        lastVoiceActivityTime = now;
-                        if (isRecordingUtterance) {
-                            totalVoicedFrames++;
-                        } else if (voiceConsecutiveFrames >= 4) {
-                            startRecordingUtterance();
-                        }
-                    } else {
-                        voiceConsecutiveFrames = 0;
-                        if (isRecordingUtterance) {
-                            const silenceDuration = now - lastVoiceActivityTime;
-                            const totalSpeech = now - speechStartTime;
-                            const waitMs = Math.max(420, parseInt(silenceMsSelect.value || '380', 10));
-                            if (silenceDuration >= waitMs || totalSpeech > 9500) {
-                                stopRecordingUtterance(false);
-                            }
-                        }
-                    }
-                }
-            }, 35);
-        }
-
-        let liveSttSocket = null;
-        let liveSttProcessor = null;
-        let liveSttReady = false;
-        let liveSttLeftover = new Float32Array(0);
-        let liveSttPartials = new Map();
-
-        function encodePCM24k(samples) {
-            const buf = new ArrayBuffer(samples.length * 2);
-            const view = new DataView(buf);
-            for (let i = 0; i < samples.length; i++) {
-                const s = Math.max(-1, Math.min(1, samples[i]));
-                view.setInt16(i * 2, s * 32767, true);
-            }
-            return buf;
-        }
-
-        function resampleTo24k(samples, fromRate) {
-            const all = new Float32Array(liveSttLeftover.length + samples.length);
-            all.set(liveSttLeftover);
-            all.set(samples, liveSttLeftover.length);
-            const step = fromRate / 24000;
-            const out = [];
-            let pos = 0;
-            while (pos + 1 < all.length) {
-                const j = Math.floor(pos);
-                const frac = pos - j;
-                out.push(all[j] * (1 - frac) + all[j + 1] * frac);
-                pos += step;
-            }
-            liveSttLeftover = all.slice(Math.floor(pos));
-            return new Float32Array(out);
-        }
-
-        function startLiveSttStream(micSourceNode) {
-            stopLiveSttStream();
-            try {
-                const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-                liveSttSocket = new WebSocket(wsProto + location.host + '/ws/live-stt');
-                liveSttPartials.clear();
-
-                liveSttSocket.onmessage = (e) => {
-                    try {
-                        const m = JSON.parse(e.data);
-                        const type = m.type;
-                        if (type === 'ready') {
-                            liveSttReady = true;
-                        } else if (type === 'conversation.item.input_audio_transcription.delta') {
-                            const id = m.item_id || 'cur';
-                            const cur = (liveSttPartials.get(id) || '') + (m.delta || '');
-                            liveSttPartials.set(id, cur);
-                            if (currentState === 'listening' && cur.trim()) {
-                                liveSubtitle.textContent = `🎙️ Siz: ${cur.trim()}...`;
-                                startSpeculativeFetch(cur.trim(), false);
-                            }
-                        } else if (type === 'conversation.item.input_audio_transcription.completed') {
-                            const id = m.item_id || 'cur';
-                            liveSttPartials.delete(id);
-                            const tx = (m.transcript || '').trim();
-                            if (tx.length >= 2 && isCallActive && currentState === 'listening') {
-                                stopRecordingUtterance(true);
-                                handleEdgeTurboTurn(tx);
-                            }
-                        } else if (type === 'error') {
-                            liveSttReady = false;
-                        }
-                    } catch (err) {}
-                };
-
-                liveSttSocket.onclose = () => {
-                    liveSttReady = false;
-                };
-
-                liveSttProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
-                liveSttProcessor.onaudioprocess = (e) => {
-                    if (!isCallActive || !liveSttReady || !liveSttSocket || liveSttSocket.readyState !== WebSocket.OPEN) return;
-                    if (currentState !== 'listening' || (performance.now() - aiSpeechEndedAt < 450)) return;
-                    // Only stream when user is actively speaking or within 700ms tail so room silence is never sent!
-                    if (!isRecordingUtterance && (performance.now() - lastVoiceActivityTime > 700)) return;
-                    if (liveSttSocket.bufferedAmount > 250000) return;
-                    const resampled = resampleTo24k(e.inputBuffer.getChannelData(0), audioCtx.sampleRate);
-                    if (resampled.length > 0) {
-                        liveSttSocket.send(encodePCM24k(resampled));
-                    }
-                };
-                micSourceNode.connect(liveSttProcessor);
-                liveSttProcessor.connect(audioCtx.destination);
-            } catch (err) {
-                liveSttReady = false;
-            }
-        }
-
-        function stopLiveSttStream() {
-            liveSttReady = false;
-            liveSttLeftover = new Float32Array(0);
-            liveSttPartials.clear();
-            if (liveSttProcessor) {
-                try {
-                    liveSttProcessor.disconnect();
-                    liveSttProcessor.onaudioprocess = null;
-                } catch (e) {}
-                liveSttProcessor = null;
-            }
-            if (liveSttSocket) {
-                try { liveSttSocket.close(); } catch (e) {}
-                liveSttSocket = null;
+                if (message.superseded || !isCallActive || isStoppingCall) return;
+                const history = pendingLiveHistory;
+                pendingLiveHistory = null;
+                handleEdgeTurboTurn(agentText, {
+                    history, display: false, record: false, displayText: text,
+                    needsConfirmation: message.needs_confirmation, speechEndAt,
+                    detectedLanguage: message.language,
+                });
+            } else if (message.type === 'conversation.item.input_audio_transcription.failed') {
+                livePartials.delete(id);
+                appendMessage('system', message.message || 'Bu gapni aniqlab bo‘lmadi. Iltimos, qaytaring.');
             }
         }
 
         async function startEdgeTurboCall() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-            }
-            await loadReflexPack();
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
-            });
-            micStream = stream;
-            const source = audioCtx.createMediaStreamSource(stream);
-            micAnalyser = audioCtx.createAnalyser();
-            micAnalyser.fftSize = 128;
-            source.connect(micAnalyser);
-            micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
-
-            // 400ms Pre-Roll DelayNode so the first syllable/consonant ("tovarim", "buyurtmam") is NEVER clipped!
-            const preRollDelay = audioCtx.createDelay(1.0);
-            preRollDelay.delayTime.value = 0.40;
-            delayedMicDest = audioCtx.createMediaStreamDestination();
-            source.connect(preRollDelay);
-            preRollDelay.connect(delayedMicDest);
-
-            isCallActive = true;
-            callToggleBtn.className = 'btn-call end';
-            callToggleBtn.innerHTML = '<span>📴 Qo\'ng\'iroqni yakunlash</span>';
-            startHardwareVoiceVAD();
-            startLiveSttStream(source);
-            setUIState('listening', "⚡ AI ovozli yordamchi ulandi! Gapiravering!");
-
-            // Instant greeting from 0ms cache
+            if (isStartingCall || isStoppingCall || isCallActive) return;
+            isStartingCall = true;
+            engineSelect.disabled = true;
+            const generation = ++callGeneration;
+            callToggleBtn.disabled = true;
+            langSelect.disabled = true;
+            silenceMsSelect.disabled = true;
+            setUIState('thinking', 'Nutq modeli va mikrofon ulanmoqda…');
+            liveFinalIds.clear();
+            livePartials.clear();
+            speechEndTimes.clear();
+            pendingLiveHistory = null;
             try {
-                const res = await fetch('/api/call/voice_turn', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: "__call_connect__",
-                        character: charSelect.value,
-                        history: [],
-                        language: langSelect.value,
-                        provider: 'free_ai',
-                        model: 'gpt-5.4-nano',
-                        voice: voiceSelect.value,
-                        speed: 1.15,
-                        used_bridge: false
-                    })
+                if (!audioCtx || audioCtx.state === 'closed') audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                await audioCtx.resume();
+                const capture = new LiveAudio.MicrophoneStream({
+                    context: audioCtx,
+                    language: langSelect.value.split('-')[0],
+                    silenceMs: Number(silenceMsSelect.value),
+                    agent: false,
+                    onEvent: message => { if (generation === callGeneration) handleLiveEvent(message); },
+                    onError: error => {
+                        if (generation !== callGeneration) return;
+                        appendMessage('system', error.message);
+                        stopCall(error.message);
+                    },
                 });
-                if (res.ok && isCallActive) {
-                    const data = await res.json();
-                    if (data.audio_b64) {
-                        appendMessage('ai', data.reply);
-                        await playAudioBase64Promise(data.audio_b64, data.reply, false);
-                    }
+                liveCapture = capture;
+                const ready = await capture.start();
+                if (generation !== callGeneration) { await capture.stop(); return; }
+                micStream = capture.stream;
+                micAnalyser = audioCtx.createAnalyser();
+                micAnalyser.fftSize = 128;
+                capture.source.connect(micAnalyser);
+                micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+                isCallActive = true;
+                callToggleBtn.disabled = false;
+                callToggleBtn.className = 'btn-call end';
+                callToggleBtn.innerHTML = '<span>📴 Qo‘ng‘iroqni yakunlash</span>';
+                modeBadge.textContent = ready.provider === 'local' || ready.provider === 'faster_whisper'
+                    ? 'Mahalliy jonli STT + Neural TTS' : 'OpenAI jonli STT + Neural TTS';
+                setUIState('listening', 'Ulandi. Gapiravering — matn jonli chiqadi.');
+            } catch (error) {
+                if (generation === callGeneration) {
+                    appendMessage('system', error.message);
+                    await stopCall(error.message);
                 }
-            } catch (e) {}
+            } finally {
+                isStartingCall = false;
+                engineSelect.disabled = false;
+                if (!isStoppingCall) callToggleBtn.disabled = false;
+            }
         }
 
         async function startCall() {
+            if (isStartingCall || isStoppingCall) return;
             if (engineSelect.value === 'webrtc') {
                 await startWebRTCCall();
             } else {
@@ -1470,41 +1170,29 @@
             }
         }
 
-        function stopCall() {
+        async function stopCall(message = 'Qo‘ng‘iroq yakunlandi.') {
+            if (isStoppingCall) return;
+            isStoppingCall = true;
             isCallActive = false;
-            callToggleBtn.disabled = false;
-            stopLiveSttStream();
-            if (vadInterval) {
-                clearInterval(vadInterval);
-                vadInterval = null;
-            }
-            stopRecordingUtterance(true);
-            if (silenceTimer) clearTimeout(silenceTimer);
-            if (turnAbortController) {
-                try { turnAbortController.abort(); } catch (e) {}
-            }
-            stopCurrentAudio();
-            if (recognition) {
-                const r = recognition;
-                recognition = null;
-                try { r.abort(); } catch (e) {}
-            }
-            if (dataChannel) {
-                try { dataChannel.close(); } catch (e) {}
-                dataChannel = null;
-            }
-            if (peerConnection) {
-                try { peerConnection.close(); } catch (e) {}
-                peerConnection = null;
-            }
-            if (micStream) {
-                micStream.getTracks().forEach(t => t.stop());
-                micStream = null;
-            }
+            callToggleBtn.disabled = true;
+            cancelEdgeTurn();
+            const capture = liveCapture;
+            liveCapture = null;
+            // Keep event handlers alive until the backend finalizes the last spoken word.
+            if (capture) await capture.stop();
+            callGeneration++;
+            if (dataChannel) { try { dataChannel.close(); } catch (_) {} dataChannel = null; }
+            if (peerConnection) { try { peerConnection.close(); } catch (_) {} peerConnection = null; }
+            if (micStream) { micStream.getTracks().forEach(track => track.stop()); micStream = null; }
+            if (micAnalyser) { try { micAnalyser.disconnect(); } catch (_) {} micAnalyser = null; }
             rtcAudioPlayer.srcObject = null;
+            langSelect.disabled = false;
+            silenceMsSelect.disabled = false;
             callToggleBtn.className = 'btn-call start';
-            callToggleBtn.innerHTML = '<span>📞 Qo\'ng\'iroqni boshlash</span>';
-            setUIState('idle', "Qo'ng'iroq yakunlandi.");
+            callToggleBtn.innerHTML = '<span>📞 Qo‘ng‘iroqni boshlash</span>';
+            isStoppingCall = false;
+            callToggleBtn.disabled = false;
+            setUIState('idle', message);
         }
 
         document.querySelectorAll('.faq-chip').forEach(btn => {
@@ -1529,7 +1217,7 @@
                 dataChannel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
                 setUIState('listening', "Gapni bo'ldingiz — sizni eshitmoqdaman!");
             } else {
-                stopCurrentAudio();
+                cancelEdgeTurn();
                 setUIState('listening', "Gapni bo'ldingiz — sizni eshitmoqdaman!");
             }
         }
@@ -1561,6 +1249,8 @@
                 await handleEdgeTurboTurn(val);
             }
         });
+
+        window.addEventListener('pagehide', () => liveCapture?.release());
 
         // 60FPS 3D Harmonic Audio-Reactive Orb Renderer
         let phase = 0;
