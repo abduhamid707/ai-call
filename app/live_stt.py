@@ -1,318 +1,271 @@
-"""Browser microphone -> backend WS -> OpenAI Realtime transcription + Streaming AI Agent + Early/Parallel TTS."""
+"""Browser PCM -> revisable captions -> exactly one finalized customer turn."""
 import asyncio
-import base64
 import json
+import logging
 import os
-import socket
+from collections import OrderedDict, deque
 from pathlib import Path
+from urllib.parse import urlsplit
 
-import aiohttp
-import websockets
 from dotenv import load_dotenv
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-from .speech_cleanup import clean_transcript
-from .elevenlabs_call import (
-    generate_edge_tts_audio,
-    get_character_system_prompt,
-)
+from .live_agent import LiveAgent
+from .openai_live_stt import OpenAITranscriptionSession, transcription_session
 
 load_dotenv()
-
 router = APIRouter()
-
-# OpenAI Realtime transcription language whitelist ('uz' is not in OpenAI's ISO whitelist and must use auto-detect + prompt)
-_SUPPORTED_REALTIME_LANGS = {
-    "af", "ar", "az", "be", "bg", "bs", "ca", "cs", "cy", "da", "de", "el",
-    "en", "es", "et", "fa", "fi", "fr", "gl", "he", "hi", "hr", "hu", "hy",
-    "id", "is", "it", "iw", "ja", "kk", "kn", "ko", "lt", "lv", "mi", "mk",
-    "mr", "ms", "ne", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sr",
-    "sv", "sw", "ta", "th", "tl", "tr", "uk", "ur", "vi", "zh",
-}
+logger = logging.getLogger(__name__)
+LANGUAGES = {"uz", "ru", "en", "tr", "auto"}
+_active_sessions = 0
 
 
-def transcription_session():
-    language = os.getenv("LIVE_STT_LANGUAGE", "uz").strip().lower()
-    prompt = os.getenv("LIVE_STT_VOCABULARY_HINTS", "O'zbek tilida (lotin alifbosida):").strip()
-    transcription = {"model": os.getenv("LIVE_STT_MODEL", "gpt-4o-transcribe")}
-    if language in _SUPPORTED_REALTIME_LANGS:
-        transcription["language"] = language
-    if prompt:
-        transcription["prompt"] = prompt[:1000]
+def normalize_language(value: str | None) -> str:
+    language = (value or os.getenv("LIVE_STT_LANGUAGE", "uz")).strip().lower().split("-")[0]
+    if language not in LANGUAGES:
+        raise ValueError("Til uz, ru, en, tr yoki auto bo'lishi kerak.")
+    return language
+
+
+def normalize_silence(value: str | int | None) -> int:
+    try:
+        result = int(value if value is not None else os.getenv("LIVE_STT_SILENCE_MS", "600"))
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Sukut muddati 300–1500 ms oralig'ida bo'lishi kerak.") from exc
+    if not 300 <= result <= 1500:
+        raise ValueError("Sukut muddati 300–1500 ms oralig'ida bo'lishi kerak.")
+    return result
+
+
+def live_config(language=None, silence_ms=None) -> dict:
+    provider = os.getenv("LIVE_STT_PROVIDER", "local").strip().lower()
+    if provider not in {"local", "openai"}:
+        raise ValueError("LIVE_STT_PROVIDER local yoki openai bo'lishi kerak.")
     return {
-        "type": "transcription",
-        "audio": {
-            "input": {
-                "format": {"type": "audio/pcm", "rate": 24000},
-                "transcription": transcription,
-                "noise_reduction": {"type": "near_field"},
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.35,
-                    "prefix_padding_ms": 500,
-                    "silence_duration_ms": 600,
-                },
-            }
-        },
+        "provider": provider,
+        "sample_rate": 16000 if provider == "local" else 24000,
+        "language": normalize_language(language),
+        "silence_ms": normalize_silence(silence_ms),
     }
+
+
+@router.get("/api/live-stt/config")
+async def live_stt_config():
+    """Configuration, not model readiness. No model load/download on a GET."""
+    try:
+        return live_config()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/live-stt", response_class=HTMLResponse)
 async def live_stt_page():
-    return Path("app/templates/live_stt.html").read_text(encoding="utf-8")
+    return (Path(__file__).parent / "templates" / "live_stt.html").read_text(encoding="utf-8")
+
+
+class TranscriptRelay:
+    """Coalesce bounded acoustic windows without answering mid-sentence."""
+
+    def __init__(self, emit, agent=None):
+        self.emit, self.agent = emit, agent
+        self.latest_turn = None
+        self.segments, self.raw_segments, self.uncertain = {}, {}, {}
+        self.completed = OrderedDict()
+        self.order = deque()
+        self.finals = {}
+        self.lock = asyncio.Lock()
+        self.unsent = []
+        self.unsent_uncertain = False
+        self.stopping = False
+
+    async def __call__(self, event):
+        async with self.lock:
+            await self._handle(event)
+
+    async def _handle(self, event):
+        event = dict(event)
+        kind = event.get("type")
+        turn_id = event.get("turn_id") or event.get("item_id")
+        if turn_id:
+            event["item_id"] = turn_id
+        if kind == "input_audio_buffer.speech_started":
+            self.latest_turn = turn_id
+            if turn_id and turn_id not in self.order and turn_id not in self.completed:
+                self.order.append(turn_id)
+                if len(self.order) > 32:
+                    raise RuntimeError("Transkripsiya navbati to'ldi. Qayta ulang.")
+            if self.agent:
+                await self.agent.interrupt()
+        elif kind == "transcript.partial":
+            event["transcript"] = " ".join(
+                self.segments.get(turn_id, []) + [event.get("transcript", "")]
+            ).strip()
+        elif kind == "conversation.item.input_audio_transcription.completed":
+            if not turn_id or turn_id in self.completed:
+                return
+            text = str(event.get("transcript") or "").strip()
+            raw = str(event.get("raw_transcript", text) or "").strip()
+            self.segments.setdefault(turn_id, []).append(text)
+            self.raw_segments.setdefault(turn_id, []).append(raw)
+            self.uncertain[turn_id] = self.uncertain.get(turn_id, False) or bool(event.get("needs_confirmation"))
+            if event.get("end_of_turn") is False:
+                await self.emit({"type": "transcript.partial", "item_id": turn_id,
+                                 "transcript": " ".join(self.segments[turn_id]).strip()})
+                return
+            event["transcript"] = " ".join(self.segments.pop(turn_id)).strip()
+            event["raw_transcript"] = " ".join(self.raw_segments.pop(turn_id)).strip()
+            event["needs_confirmation"] = self.uncertain.pop(turn_id)
+            self.completed[turn_id] = True
+            if len(self.completed) > 256:
+                self.completed.popitem(last=False)
+            if turn_id not in self.order:
+                self.order.append(turn_id)
+            self.finals[turn_id] = event
+            # Hosted completion order is not guaranteed. Deliver final customer
+            # turns in speech order, without losing the earlier question.
+            while self.order and self.order[0] in self.finals:
+                final_id = self.order.popleft()
+                final = self.finals.pop(final_id)
+                superseded = self.latest_turn is not None and final_id != self.latest_turn
+                final["superseded"] = superseded
+                if final["transcript"]:
+                    self.unsent.append(final["transcript"])
+                    self.unsent_uncertain |= final["needs_confirmation"]
+                if sum(map(len, self.unsent)) > 24000:
+                    raise ValueError("Transkripsiya navbati to'ldi. Qo'ng'iroqni qayta boshlang.")
+                if not superseded:
+                    final["agent_text"] = " ".join(self.unsent)
+                    final["needs_confirmation"] |= self.unsent_uncertain
+                    self.unsent.clear()
+                    self.unsent_uncertain = False
+                await self.emit(final)
+                if self.agent and not superseded and not self.stopping and final.get("agent_text"):
+                    await self.agent.submit(final_id, final["agent_text"], final["needs_confirmation"])
+            return
+        await self.emit(event)
+
+
+def create_transcriber(config, emit):
+    if config["provider"] == "openai":
+        return OpenAITranscriptionSession(language=config["language"], silence_ms=config["silence_ms"], emit=emit)
+    from .local_stt import LocalSTTSession
+    return LocalSTTSession(language=config["language"], silence_ms=config["silence_ms"], emit=emit)
+
+
+async def start_transcriber(client, transcriber, timeout=80):
+    """Release abandoned cold-start sessions without cancelling native inference.
+
+    The bounded native worker can finish a model download in the background;
+    the disconnected browser no longer occupies a WebSocket admission slot.
+    """
+    initializing = asyncio.create_task(transcriber.start())
+    receiving = asyncio.create_task(client.receive())
+    try:
+        done, _ = await asyncio.wait({initializing, receiving}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        if receiving in done:
+            message = receiving.result()
+            if message["type"] == "websocket.disconnect":
+                raise WebSocketDisconnect(message.get("code", 1000))
+            raise ValueError("Mikrofonni model tayyor bo'lgandan keyin yuboring.")
+        if initializing in done:
+            return initializing.result()
+        raise RuntimeError("Nutq modeli hali tayyor emas. Modelni oldindan yuklang va qayta ulang.")
+    finally:
+        for task in (initializing, receiving):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(initializing, receiving, return_exceptions=True)
 
 
 @router.websocket("/ws/live-stt")
 async def live_stt_socket(client: WebSocket):
-    await client.accept()
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
-        await client.send_json({"type": "error", "message": "OPENAI_API_KEY serverda sozlanmagan."})
-        await client.close(code=1011)
+    global _active_sessions
+    origin = client.headers.get("origin")
+    if origin and urlsplit(origin).netloc.lower() != client.headers.get("host", "").lower():
+        await client.close(code=1008)
         return
-
-    upstream = None
-
-    response_queue = asyncio.Queue(maxsize=4)
-    handled = set()
-    default_sys_prompt = get_character_system_prompt("ai_call_center")
-    history = [
-        {
-            "role": "system",
-            "content": os.getenv("LIVE_AGENT_PROMPT", default_sys_prompt),
-        }
-    ]
+    await client.accept()
+    transcriber = agent = None
+    admitted = False
     send_lock = asyncio.Lock()
 
-    async def emit(data):
+    async def emit(event):
         async with send_lock:
-            await client.send_json(data)
-
-    async def agent_worker():
-        connector = aiohttp.TCPConnector(family=socket.AF_INET, ttl_dns_cache=600)
-        async with aiohttp.ClientSession(
-            connector=connector,
-            timeout=aiohttp.ClientTimeout(total=75),
-        ) as http:
-            # Pre-warm TLS connection to api.openai.com while user is speaking
-            try:
-                async with http.get(
-                    "https://api.openai.com/v1/models",
-                    headers={"Authorization": f"Bearer {key}"},
-                ):
-                    pass
-            except Exception:
-                pass
-            while True:
-                turn_id, question = await response_queue.get()
-                try:
-                    history.append({"role": "user", "content": question})
-                    history[:] = history[:1] + history[-14:]
-                    await emit({"type": "agent_thinking", "turn_id": turn_id})
-
-                    async with http.post(
-                        "https://api.openai.com/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {key}"},
-                        json={
-                            "model": os.getenv("LIVE_AGENT_MODEL", "gpt-4o-mini"),
-                            "messages": history,
-                            "stream": True,
-                            "max_completion_tokens": 220,
-                        },
-                    ) as reply:
-                        if reply.status != 200:
-                            raise RuntimeError("Chat API failure")
-                        text_parts, pending, tasks = [], "", []
-                        async for raw in reply.content:
-                            for line in raw.splitlines():
-                                if not line.startswith(b"data: ") or line == b"data: [DONE]":
-                                    continue
-                                try:
-                                    delta = (
-                                        json.loads(line[6:])["choices"][0]
-                                        .get("delta", {})
-                                        .get("content")
-                                        or ""
-                                    )
-                                except (ValueError, IndexError, KeyError, TypeError):
-                                    continue
-                                if not delta:
-                                    continue
-                                text_parts.append(delta)
-                                pending += delta
-                                await emit({"type": "agent_text_delta", "turn_id": turn_id, "delta": delta})
-                                first_clause_ready = (
-                                    len(tasks) == 0
-                                    and len(pending.strip()) >= 22
-                                    and any(c in pending for c in ",.!?;:")
-                                )
-                                if len(tasks) < 7 and (
-                                    first_clause_ready
-                                    or any(c in pending for c in ".!?")
-                                    or len(pending) > 110
-                                ):
-                                    piece, pending = pending, ""
-                                    tasks.append(
-                                        asyncio.create_task(synthesize(http, turn_id, len(tasks), piece))
-                                    )
-                        if pending.strip():
-                            tasks.append(
-                                asyncio.create_task(synthesize(http, turn_id, len(tasks), pending))
-                            )
-                    answer = "".join(text_parts).strip()
-                    if answer:
-                        history.append({"role": "assistant", "content": answer})
-                    if tasks:
-                        results = await asyncio.gather(*tasks, return_exceptions=True)
-                        if any(isinstance(x, Exception) for x in results):
-                            await emit({"type": "agent_error", "message": "Ovoz sintezida xato."})
-                    await emit({"type": "agent_done", "turn_id": turn_id, "chunks": len(tasks)})
-                except Exception:
-                    await emit({"type": "agent_error", "message": "AI javobini olishda xato."})
-                    await emit({"type": "agent_done", "turn_id": turn_id, "chunks": 0})
-                finally:
-                    response_queue.task_done()
-
-    async def synthesize(http, turn_id, index, text):
-        audio = b""
-        if os.getenv("LIVE_AGENT_TTS_PROVIDER", "edge_tts").lower() != "openai":
-            try:
-                audio = await generate_edge_tts_audio(
-                    text,
-                    voice=os.getenv("LIVE_AGENT_EDGE_VOICE", "uz-UZ-SardorNeural"),
-                    speed=1.15,
-                )
-            except Exception:
-                audio = b""
-        if not audio:
-            async with http.post(
-                "https://api.openai.com/v1/audio/speech",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
-                    "model": os.getenv("LIVE_AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
-                    "voice": os.getenv("LIVE_AGENT_VOICE", "coral"),
-                    "input": text,
-                    "response_format": "mp3",
-                },
-            ) as reply:
-                if reply.status != 200:
-                    raise RuntimeError("TTS API failure")
-                audio = await reply.read()
-        await emit(
-            {
-                "type": "agent_audio",
-                "turn_id": turn_id,
-                "index": index,
-                "audio": base64.b64encode(audio).decode("ascii"),
-            }
-        )
+            await client.send_json(event)
 
     try:
-        upstream = await websockets.connect(
-            "wss://api.openai.com/v1/realtime?intent=transcription",
-            additional_headers={"Authorization": f"Bearer {key}"},
-            max_size=2**22,
-            open_timeout=15,
-        )
-        await upstream.send(json.dumps({"type": "session.update", "session": transcription_session()}))
-        await client.send_json({"type": "ready"})
-
-        async def send_audio():
-            while True:
-                message = await client.receive()
-                if message["type"] == "websocket.disconnect":
-                    return
-                packet = message.get("bytes")
-                if packet:
-                    # 24kHz mono signed 16-bit PCM, limited to 1 second per packet.
-                    if len(packet) > 48000:
-                        await client.send_json({"type": "error", "message": "Audio chunk juda katta."})
-                        continue
-                    await upstream.send(
-                        json.dumps(
-                            {
-                                "type": "input_audio_buffer.append",
-                                "audio": base64.b64encode(packet).decode("ascii"),
-                            }
-                        )
-                    )
-                elif message.get("text"):
-                    try:
-                        event = json.loads(message["text"])
-                    except ValueError:
-                        continue
-                    if event.get("type") == "agent_utterance":
-                        item_id = str(event.get("item_id") or "")[:120]
-                        utterance = str(event.get("text") or "").strip()[:1200]
-                        if item_id and utterance and item_id not in handled:
-                            handled.add(item_id)
-                            if not response_queue.full():
-                                await response_queue.put((item_id, utterance))
-                        continue
-                    if event.get("type") == "stop":
-                        return
-
-        async def receive_transcripts():
-            async for message in upstream:
-                event = json.loads(message)
-                kind = event.get("type")
-                if kind in (
-                    "conversation.item.input_audio_transcription.delta",
-                    "conversation.item.input_audio_transcription.completed",
-                    "conversation.item.input_audio_transcription.failed",
-                    "input_audio_buffer.speech_started",
-                    "input_audio_buffer.speech_stopped",
-                    "error",
-                ):
-                    raw_tx = event.get("transcript", "")
-                    cleaned_tx = (
-                        clean_transcript(raw_tx)
-                        if kind == "conversation.item.input_audio_transcription.completed"
-                        else raw_tx
-                    )
-                    if kind == "conversation.item.input_audio_transcription.completed":
-                        low_tx = cleaned_tx.lower()
-                        if "lotin alifbosida" in low_tx or low_tx in {"o'zbek tilida", "o'zbek tilida:"}:
-                            continue
-                    await emit(
-                        {
-                            "type": kind,
-                            "item_id": event.get("item_id"),
-                            "delta": event.get("delta", ""),
-                            "transcript": cleaned_tx,
-                            "message": (
-                                event.get("error", {}).get("message", "")
-                                if isinstance(event.get("error"), dict)
-                                else ""
-                            ),
-                        }
-                    )
-
-        agent_task = asyncio.create_task(agent_worker())
-        tasks = [asyncio.create_task(send_audio()), asyncio.create_task(receive_transcripts())]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        agent_task.cancel()
-        await asyncio.gather(agent_task, return_exceptions=True)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        for task in done:
-            if not task.cancelled() and task.exception():
-                raise task.exception()
-    except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
+        config = live_config(client.query_params.get("language"), client.query_params.get("silence_ms"))
+        max_sessions = max(1, min(32, int(os.getenv("LIVE_STT_MAX_SESSIONS", "2"))))
+        if _active_sessions >= max_sessions:
+            await emit({"type": "error", "message": "Ovoz serveri band. Birozdan keyin qayta ulang."})
+            await client.close(code=1013)
+            return
+        _active_sessions += 1
+        admitted = True
+        if client.query_params.get("agent", "false").lower() == "true":
+            agent = LiveAgent(emit, language=config["language"])
+        relay = TranscriptRelay(emit, agent)
+        transcriber = create_transcriber(config, relay)
+        await emit({"type": "loading", "message": "Nutq modeli tayyorlanmoqda…"})
+        ready = await start_transcriber(client, transcriber)
+        await emit({"type": "ready", **config, **ready})
+        while True:
+            message = await client.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            packet = message.get("bytes")
+            if packet is not None:
+                if not packet:
+                    continue
+                if len(packet) % 2 or len(packet) > config["sample_rate"] * 2:
+                    raise ValueError("Audio mono PCM16 bo'lishi va paket 1 soniyadan oshmasligi kerak.")
+                await transcriber.feed(packet)
+            elif message.get("text"):
+                if len(message["text"]) > 4096:
+                    raise ValueError("Boshqaruv xabari juda katta.")
+                try:
+                    command = json.loads(message["text"])
+                except ValueError as exc:
+                    raise ValueError("Boshqaruv xabari JSON bo'lishi kerak.") from exc
+                if not isinstance(command, dict):
+                    raise ValueError("Boshqaruv xabari obyekt bo'lishi kerak.")
+                if command.get("type") == "stop":
+                    relay.stopping = True
+                    if agent:
+                        await agent.interrupt()
+                    await asyncio.wait_for(transcriber.flush(), timeout=30)
+                    await emit({"type": "stopped"})
+                    break
+                if command.get("type") == "interrupt" and agent:
+                    await agent.interrupt()
+                if command.get("type") == "agent_playback_done" and agent:
+                    await agent.acknowledge(str(command.get("turn_id") or "")[:120])
+                # Only server finals enter the agent; ignore legacy client echoes.
+    except WebSocketDisconnect:
         pass
-    except Exception:
+    except (ValueError, RuntimeError, TimeoutError) as exc:
+        logger.warning("Live STT session failed: %s", type(exc).__name__)
         try:
-            await client.send_json(
-                {"type": "error", "message": "Streaming transkripsiya ulanmagan. Server logini tekshiring."}
-            )
-        except Exception:
+            await emit({"type": "error", "message": str(exc) or "Nutq serveri javob bermadi."})
+        except (RuntimeError, WebSocketDisconnect):
+            pass
+    except Exception:
+        logger.warning("Live STT transport failed", exc_info=False)
+        try:
+            await emit({"type": "error", "message": "Jonli transkripsiyada uzilish. Qayta ulang."})
+        except (RuntimeError, WebSocketDisconnect):
             pass
     finally:
-        if upstream:
-            await upstream.close()
+        cleanup = []
+        if agent:
+            cleanup.append(agent.close())
+        if transcriber:
+            cleanup.append(transcriber.close())
+        await asyncio.gather(*cleanup, return_exceptions=True)
+        if admitted:
+            _active_sessions -= 1
         try:
             await client.close()
-        except Exception:
+        except RuntimeError:
             pass

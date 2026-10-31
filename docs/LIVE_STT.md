@@ -1,15 +1,23 @@
-# Live OpenAI Speech-to-Text
+# Live speech-to-text
 
-Start server with `OPENAI_API_KEY` configured, then open **/live-stt** (e.g. `http://localhost:8000/live-stt`). Microphone requires localhost or HTTPS and browser permission. This mode uses billable OpenAI API traffic (a ChatGPT subscription does not automatically include API credit).
+The current integration and research/deployment guide is
+[STREAMING_ASR.md](STREAMING_ASR.md).
 
-Browser microphone -> PCM mono 24 kHz chunks -> local FastAPI WebSocket `/ws/live-stt` -> server-side OpenAI Realtime transcription WS -> incremental delta and completed events -> live transcript UI.
+- `LIVE_STT_PROVIDER=local` selects the local faster-whisper streaming engine
+  (multilingual `large-v3` by default). Local ASR itself needs no OpenAI key.
+- `LIVE_STT_PROVIDER=openai` explicitly selects the existing hosted transcription
+  adapter and requires the server-side `OPENAI_API_KEY`.
+- `/call` uses the streaming recognition path for conversation. `/live-stt`
+  provides a standalone interface, including transcript-only use and an agent
+  mode. Agent chat and speech synthesis keep their own provider requirements.
+- Language choices are Uzbek (`uz`), Russian (`ru`), English (`en`) and automatic
+  (`auto`). Test mixed speech separately; language coverage is not an accuracy
+  guarantee.
 
-Environment:
-- `OPENAI_API_KEY` required server-side.
-- `LIVE_STT_MODEL=gpt-4o-transcribe` default
-- `LIVE_STT_LANGUAGE=uz` default; clear for multilingual auto detection
-- `LIVE_STT_VOCABULARY_HINTS="tovarim, buyurtma, mahsulot"` optional vocabulary hints
+Microphone access needs localhost or HTTPS and browser permission. Wait for
+model readiness before speaking. See the current guide for `.env` settings,
+CPU/GPU installation, evaluation commands, model/license comparisons, and live
+acceptance criteria.
 
-No API key exposed in the browser. The transcript panel is intentionally standalone; it does **not** yet replace legacy record-and-transcribe on the main chat page or inject transcripts into the assistant conversation. WebRTC realtime conversation is also unchanged. Review this scope before enabling for phone calls.
-
-Quick validation: `pytest -q tests/test_live_stt.py tests/test_speech_cleanup.py`. Live tests must be run with a microphone and funded API key. Check Uzbek 'tovarim', pauses, and quiet speech and confirm partial/final update ordering.
+The separate WebRTC Realtime page is configured independently; see
+[LOCAL_REALTIME.md](LOCAL_REALTIME.md).

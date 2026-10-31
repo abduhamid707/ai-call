@@ -50,13 +50,17 @@ dependencies = [
     "fastapi==0.141.1",
     "uvicorn==0.30.1",
     "websockets==15.0.1",
+    "jinja2==3.1.6",
+    "python-multipart==0.0.32",
     
     # WebRTC (for OpenAI Realtime)
     "aiortc>=1.14.0",
-    "av>=14.0.0",
+    # faster-whisper 1.1.1 uses av.open(metadata_errors=...), removed in PyAV 19.
+    "av>=14.0.0,<19",
     
     # TTS - Typecast
     "typecast-python>=0.1.0",
+    "edge-tts==7.3.1",
 
     # Configuration
     "pydantic==2.13.4",

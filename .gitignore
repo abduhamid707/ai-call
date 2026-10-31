@@ -229,6 +229,7 @@ pretrained_models/
 .venv-uv-cuda/
 .venv-cuda-py311/
 .venv-test-py311/
+.venv-test/
 venv/
 .venv/
 node_modules/
