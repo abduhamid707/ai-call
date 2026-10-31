@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from app.live_agent import LiveAgent
 
@@ -67,6 +68,36 @@ def test_real_reply_barge_in_cancels_http_stream_and_nested_tts(monkeypatch):
         finally:
             await agent.close()
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("selection,detected,voice", [
+    ("auto", "ru", "ru-RU-DmitryNeural"),
+    ("auto", "en", "en-US-AndrewMultilingualNeural"),
+    ("uz", "ru", "uz-UZ-SardorNeural"),
+])
+def test_reply_voice_follows_detected_language_only_in_auto_mode(monkeypatch, selection, detected, voice):
+    async def scenario():
+        voices = []
+        async def emit(event):
+            pass
+        async def synthesis(*args, **kwargs):
+            voices.append(kwargs["voice"])
+            return b"audio"
+        def response(request):
+            return httpx.Response(200, stream=SpeechReply("This is a complete answer."))
+        monkeypatch.setattr("app.live_agent.get_active_openai_key", lambda: "test-not-a-real-key")
+        monkeypatch.setattr("app.live_agent.generate_edge_tts_audio", synthesis)
+        monkeypatch.delenv("LIVE_AGENT_EDGE_VOICE", raising=False)
+        monkeypatch.setenv("LIVE_AGENT_TTS_PROVIDER", "edge_tts")
+        agent = LiveAgent(emit, selection)
+        await mock_http(agent, response)
+        try:
+            await agent.submit("turn", "question", language=detected)
+            await asyncio.wait_for(agent.task, 2)
+            assert voices == [voice]
+        finally:
+            await agent.close()
     asyncio.run(scenario())
 
 

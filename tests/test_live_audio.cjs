@@ -163,7 +163,8 @@ function callPageHarness() {
     const drawing = new Proxy({}, {get: (_, key) => key === 'createRadialGradient' ? () => ({addColorStop() {}}) : () => {}});
     const element = () => ({
         style: {}, value: '', textContent: '', className: '', innerHTML: '', children: [],
-        addEventListener() {}, setAttribute() {}, getContext: () => drawing,
+        listeners: {}, options: [],
+        addEventListener(type, listener) { this.listeners[type] = listener; }, setAttribute() {}, getContext: () => drawing,
         appendChild(child) { this.children.push(child); },
     });
     const document = {
@@ -230,6 +231,57 @@ test('/call a silent follow-up does not lose an earlier superseded question', ()
     assert.equal(harness.requests.length, 1);
     assert.equal(JSON.parse(harness.requests[0].options.body).message, 'buyurtmam qayerda');
     assert.equal(harness.run('conversationHistory.length'), 1);
+    harness.run('cancelEdgeTurn();');
+});
+
+function prepareVoiceOptions(harness) {
+    harness.run(`voiceSelect.options = [
+        {value:'uz-UZ-SardorNeural',dataset:{lang:'uz-UZ'}},
+        {value:'uz-UZ-MadinaNeural',dataset:{lang:'uz-UZ'}},
+        {value:'ru-RU-SvetlanaNeural',dataset:{lang:'ru-RU'}},
+        {value:'ru-RU-DmitryNeural',dataset:{lang:'ru-RU'}},
+        {value:'en-US-AvaMultilingualNeural',dataset:{lang:'en-US'}},
+        {value:'en-US-AndrewMultilingualNeural',dataset:{lang:'en-US'}}
+    ]; voiceSelect.value = 'uz-UZ-SardorNeural';`);
+}
+
+test('/call explicit Russian and English selections use matching voices and preserve manual locale choices', () => {
+    const harness = callPageHarness();
+    prepareVoiceOptions(harness);
+    harness.run("langSelect.value='ru-RU'; langSelect.listeners.change();");
+    assert.equal(harness.run('voiceSelect.value'), 'ru-RU-SvetlanaNeural');
+    harness.run("voiceSelect.value='ru-RU-DmitryNeural'; voiceSelect.listeners.change();");
+    harness.run("langSelect.listeners.change(); handleEdgeTurboTurn('номер заказа');");
+    let payload = JSON.parse(harness.requests.at(-1).options.body);
+    assert.equal(payload.language, 'ru-RU');
+    assert.equal(payload.voice, 'ru-RU-DmitryNeural');
+    harness.run("langSelect.value='en-US'; langSelect.listeners.change(); handleEdgeTurboTurn('my order');");
+    payload = JSON.parse(harness.requests.at(-1).options.body);
+    assert.equal(payload.language, 'en-US');
+    assert.equal(payload.voice, 'en-US-AvaMultilingualNeural');
+    harness.run("langSelect.value='ru-RU'; langSelect.listeners.change();");
+    assert.equal(harness.run('voiceSelect.value'), 'ru-RU-DmitryNeural', 'returning to a locale retains its manual voice');
+    harness.run('cancelEdgeTurn();');
+});
+
+test('/call automatic language uses each final transcript language for reply and voice, preserving unknown fallback', () => {
+    const harness = callPageHarness();
+    prepareVoiceOptions(harness);
+    harness.run("langSelect.value='auto';");
+    harness.run("handleLiveEvent({type:'conversation.item.input_audio_transcription.completed',item_id:'ru',transcript:'мой заказ',language:'ru'});");
+    let payload = JSON.parse(harness.requests.at(-1).options.body);
+    assert.equal(payload.language, 'ru');
+    assert.equal(payload.voice, 'ru-RU-SvetlanaNeural');
+    assert.equal(harness.run('voiceSelect.value'), payload.voice);
+    harness.run("voiceSelect.value='en-US-AndrewMultilingualNeural'; voiceSelect.listeners.change();");
+    harness.run("handleLiveEvent({type:'conversation.item.input_audio_transcription.completed',item_id:'en',transcript:'my order',language:'en'});");
+    payload = JSON.parse(harness.requests.at(-1).options.body);
+    assert.equal(payload.language, 'en');
+    assert.equal(payload.voice, 'en-US-AndrewMultilingualNeural');
+    harness.run("handleLiveEvent({type:'conversation.item.input_audio_transcription.completed',item_id:'unknown',transcript:'123',language:'unknown'});");
+    payload = JSON.parse(harness.requests.at(-1).options.body);
+    assert.equal(payload.language, 'auto');
+    assert.equal(payload.voice, 'en-US-AndrewMultilingualNeural');
     harness.run('cancelEdgeTurn();');
 });
 

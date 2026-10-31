@@ -141,7 +141,7 @@ class TranscriptRelay:
                     self.unsent_uncertain = False
                 await self.emit(final)
                 if self.agent and not superseded and not self.stopping and final.get("agent_text"):
-                    await self.agent.submit(final_id, final["agent_text"], final["needs_confirmation"])
+                    await self.agent.submit(final_id, final["agent_text"], final["needs_confirmation"], language=final.get("language"))
             return
         await self.emit(event)
 

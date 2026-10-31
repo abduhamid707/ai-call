@@ -15,6 +15,7 @@ _VOICES = {"uz": "uz-UZ-SardorNeural", "ru": "ru-RU-DmitryNeural", "en": "en-US-
 class LiveAgent:
     def __init__(self, emit, language="uz"):
         self.emit, self.language = emit, language
+        self.current_language = language
         self.history = []
         self.task = self.active_turn = None
         self.pending_answer = None
@@ -40,9 +41,10 @@ class LiveAgent:
         finally:
             await self.http.aclose()
 
-    async def submit(self, turn_id, question, needs_confirmation=False):
+    async def submit(self, turn_id, question, needs_confirmation=False, language=None):
         async with self.control_lock:
             await self._interrupt_locked()
+            self.current_language = language if self.language == "auto" and language in _VOICES else self.language
             self.active_turn = turn_id
             self.task = asyncio.create_task(self._reply(turn_id, question, needs_confirmation))
 
@@ -56,12 +58,13 @@ class LiveAgent:
 
     async def _reply(self, turn_id, question, needs_confirmation):
         synthesis = []
+        reply_language = self.current_language
         try:
             key = get_active_openai_key()
             if not key:
                 await self.emit({"type": "agent_error", "turn_id": turn_id, "message": "Matn tayyor. AI javobi uchun OPENAI_API_KEY sozlang yoki faqat transkripsiyani tanlang."})
                 return
-            messages = _build_call_messages(question, "ai_call_center", self.history, self.language)
+            messages = _build_call_messages(question, "ai_call_center", self.history, reply_language)
             if os.getenv("LIVE_AGENT_PROMPT"):
                 messages[0]["content"] += "\n" + os.environ["LIVE_AGENT_PROMPT"]
             if needs_confirmation:
@@ -94,9 +97,9 @@ class LiveAgent:
                     boundary = re.search(r"[.!?](?:\s|$)", pending)
                     if boundary and len(pending) >= 24 and len(synthesis) < 6:
                         piece, pending = pending[:boundary.end()], pending[boundary.end():]
-                        synthesis.append(asyncio.create_task(self._synthesize(turn_id, len(synthesis), piece, key)))
+                        synthesis.append(asyncio.create_task(self._synthesize(turn_id, len(synthesis), piece, key, reply_language)))
             if pending.strip():
-                synthesis.append(asyncio.create_task(self._synthesize(turn_id, len(synthesis), pending, key)))
+                synthesis.append(asyncio.create_task(self._synthesize(turn_id, len(synthesis), pending, key, reply_language)))
             answer = "".join(text_parts).strip()
             if answer:
                 self.pending_answer = (turn_id, answer)
@@ -115,11 +118,11 @@ class LiveAgent:
                     task.cancel()
             await asyncio.gather(*synthesis, return_exceptions=True)
 
-    async def _synthesize(self, turn_id, index, text, key):
+    async def _synthesize(self, turn_id, index, text, key, language=None):
         audio = b""
         if os.getenv("LIVE_AGENT_TTS_PROVIDER", "edge_tts").lower() != "openai":
             try:
-                audio = await generate_edge_tts_audio(text, voice=os.getenv("LIVE_AGENT_EDGE_VOICE", _VOICES.get(self.language, _VOICES["uz"])), speed=1.05)
+                audio = await generate_edge_tts_audio(text, voice=os.getenv("LIVE_AGENT_EDGE_VOICE", _VOICES.get(language or self.language, _VOICES["uz"])), speed=1.05)
             except Exception:
                 audio = b""
         if not audio:

@@ -470,7 +470,7 @@
                 <label for="voiceSelect">🗣️ Neural Edge-TTS Ovozi:</label>
                 <select id="voiceSelect">
                     {% for v in voices %}
-                    <option value="{{ v.id }}">{{ v.name }}</option>
+                    <option value="{{ v.id }}" data-lang="{{ v.lang }}">{{ v.name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -605,6 +605,34 @@
         const charSelect = document.getElementById('charSelect');
         const rtcModelSelect = document.getElementById('rtcModelSelect');
         const silenceMsSelect = document.getElementById('silenceMsSelect');
+
+        const preferredVoices = new Map();
+        function supportedVoiceLanguage(value) {
+            const code = String(value || '').toLowerCase().split('-')[0];
+            return ['uz', 'ru', 'en', 'tr'].includes(code) ? code : null;
+        }
+        function selectVoiceForLanguage(language) {
+            const code = supportedVoiceLanguage(language);
+            if (!code) return voiceSelect.value;
+            const options = Array.from(voiceSelect.options || []);
+            const matches = option => supportedVoiceLanguage(option.dataset?.lang || option.value) === code;
+            const current = options.find(option => option.value === voiceSelect.value);
+            if (current && matches(current)) {
+                preferredVoices.set(code, current.value);
+                return current.value;
+            }
+            const preferred = options.find(option => option.value === preferredVoices.get(code) && matches(option));
+            const voice = preferred || options.find(matches);
+            if (voice) voiceSelect.value = voice.value;
+            return voiceSelect.value;
+        }
+        voiceSelect.addEventListener('change', () => {
+            const option = Array.from(voiceSelect.options || []).find(item => item.value === voiceSelect.value);
+            const code = supportedVoiceLanguage(option?.dataset?.lang || voiceSelect.value);
+            if (code) preferredVoices.set(code, voiceSelect.value);
+        });
+        langSelect.addEventListener('change', () => selectVoiceForLanguage(langSelect.value));
+        selectVoiceForLanguage(langSelect.value);
 
         let isCallActive = false;
         let currentState = 'idle'; // idle | listening | thinking | speaking
@@ -995,6 +1023,9 @@
             const finalAt = performance.now();
             const ac = new AbortController();
             turnAbortController = ac;
+            const detectedLanguage = supportedVoiceLanguage(options.detectedLanguage);
+            const turnLanguage = langSelect.value === 'auto' && detectedLanguage ? detectedLanguage : langSelect.value;
+            const turnVoice = selectVoiceForLanguage(turnLanguage);
             setUIState('thinking', `Siz: “${options.displayText || cleaned}”`);
             try {
                 const response = await fetch('/api/call/voice_turn', {
@@ -1003,8 +1034,8 @@
                     signal: ac.signal,
                     body: JSON.stringify({
                         message: cleaned, character: charSelect.value, history: requestHistory,
-                        language: langSelect.value, provider: 'free_ai', model: 'gpt-5.4-nano',
-                        voice: voiceSelect.value, speed: 1.15, used_bridge: false,
+                        language: turnLanguage, provider: 'free_ai', model: 'gpt-5.4-nano',
+                        voice: turnVoice, speed: 1.15, used_bridge: false,
                         needs_confirmation: Boolean(options.needsConfirmation),
                     }),
                 });
@@ -1067,6 +1098,7 @@
                 handleEdgeTurboTurn(agentText, {
                     history, display: false, record: false, displayText: text,
                     needsConfirmation: message.needs_confirmation, speechEndAt,
+                    detectedLanguage: message.language,
                 });
             } else if (message.type === 'conversation.item.input_audio_transcription.failed') {
                 livePartials.delete(id);
